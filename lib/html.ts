@@ -3,11 +3,12 @@ import sanitize from 'sanitize-html';
 import TurndownService from 'turndown';
 import { createHash } from 'crypto';
 
-/** The only formatting the blog allows: headings, paragraphs, bold, italic, images, and links. */
+/** The only formatting the blog allows: headings, paragraphs, bold, italic, quotes, pull quotes, images, and links. */
 export function cleanHtml(html: string): string {
   return sanitize(html, {
-    allowedTags: ['p', 'h2', 'h3', 'h4', 'strong', 'em', 'b', 'i', 'img', 'br', 'blockquote', 'a'],
-    allowedAttributes: { img: ['src', 'alt'], a: ['href'] },
+    allowedTags: ['p', 'h2', 'h3', 'h4', 'strong', 'em', 'b', 'i', 'img', 'br', 'blockquote', 'a', 'aside'],
+    allowedAttributes: { img: ['src', 'alt'], a: ['href', 'target', 'rel'], aside: ['class'] },
+    allowedClasses: { aside: ['pull-quote'] },
     allowedSchemes: ['https', 'http', 'mailto'],
     allowedSchemesByTag: { img: [] },
     allowProtocolRelative: false,
@@ -16,6 +17,15 @@ export function cleanHtml(html: string): string {
       b: 'strong',
       i: 'em',
       li: 'p', // no lists on the blog: each item becomes its own line
+      // Links to other sites open in a new tab; links within the blog stay in place.
+      a: (tagName, attribs): sanitize.Tag => {
+        const href = (attribs.href || '').trim();
+        return /^https?:/i.test(href)
+          ? { tagName, attribs: { href, target: '_blank', rel: 'noopener noreferrer' } }
+          : { tagName, attribs: { href } };
+      },
+      // Pull quotes are the only asides.
+      aside: (tagName, attribs): sanitize.Tag => ({ tagName, attribs: { class: 'pull-quote' } }),
       img: (tagName, attribs): sanitize.Tag => {
         // Only images uploaded to this app are allowed.
         const src = attribs.src || '';
@@ -34,6 +44,11 @@ export function markdownToHtml(md: string): string {
 
 export function htmlToMarkdown(html: string): string {
   const td = new TurndownService({ headingStyle: 'atx', emDelimiter: '*' });
+  // Pull quotes stay as HTML inside the Markdown, so they survive an AI edit and come back intact.
+  td.addRule('pullQuote', {
+    filter: (node) => node.nodeName === 'ASIDE',
+    replacement: (_content, node) => `\n\n<aside class="pull-quote">${(node as HTMLElement).innerHTML}</aside>\n\n`,
+  });
   return td.turndown(html || '');
 }
 
@@ -55,5 +70,6 @@ export function slugify(s: string): string {
 
 export function formatDate(d: string | Date | null | undefined): string {
   if (!d) return '';
-  return new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+  return new Date(d).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
 }
+

@@ -70,6 +70,10 @@ export async function runLearning(by: 'cron' | 'manual' = 'cron') {
         lines.push(`<ai_fix accepted>${JSON.stringify(i.meta)}</ai_fix>`);
       } else if (i.kind === 'dismissed') {
         lines.push(`<flag_dismissed_by_kobus>${JSON.stringify(i.meta)}</flag_dismissed_by_kobus>`);
+      } else if (i.kind === 'instruction') {
+        lines.push(`<kobus_instructed_the_ai>${JSON.stringify(i.meta)}</kobus_instructed_the_ai>`);
+      } else if (i.kind === 'pull_quote') {
+        lines.push(`<kobus_made_a_pull_quote>${JSON.stringify(i.meta)}</kobus_made_a_pull_quote>`);
       } else if (i.kind === 'profile_edit') {
         lines.push(`<kobus_edited_the_profile_himself>${cap(i.content, 8000)}</kobus_edited_the_profile_himself>`);
       }

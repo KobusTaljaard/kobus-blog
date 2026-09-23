@@ -20,7 +20,7 @@ export const viewport: Viewport = { themeColor: '#f5f0e6' };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en-ZA" className={fallback.variable}>
+    <html lang="en-US" className={fallback.variable}>
       <body>{children}</body>
     </html>
   );

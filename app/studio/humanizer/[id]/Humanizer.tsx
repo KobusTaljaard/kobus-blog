@@ -2,10 +2,21 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useMemo, useState, useTransition } from 'react';
-import { CHECK_MIN, OVERALL_MIN, norm, plainText, quoteText, type HumanizerResult } from '@/lib/rules';
-import { runHumanizer, applyFix, aiFix, dismissFlag, publish, unpublish, savePublishDetails } from '../../actions';
+import { useEffect, useMemo, useState, useTransition } from 'react';
+import { CHECK_MIN, OVERALL_MIN, norm, plainText, pullQuotes, quoteText, type HumanizerResult } from '@/lib/rules';
+import {
+  runHumanizer,
+  applyFix,
+  aiFix,
+  aiInstruct,
+  dismissFlag,
+  makePullQuote,
+  publish,
+  unpublish,
+  savePublishDetails,
+} from '../../actions';
 import { pickAndUploadImage } from '../../_ui/images';
+import Instruct from '../../_ui/Instruct';
 
 type P = {
   id: string;
@@ -23,7 +34,44 @@ type P = {
   dismissed: string[];
 };
 
+type F = { check: string; quote: string; issue: string; fix?: string };
+
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+function QuoteCard({ text, path }: { text: string; path: string | null }) {
+  const [copied, setCopied] = useState(false);
+  const [origin, setOrigin] = useState('');
+  useEffect(() => setOrigin(window.location.origin), []);
+  const url = path && origin ? origin + path : null;
+  const post = `“${text}”${url ? `\n\n${url}` : ''}`;
+  const len = post.length;
+  return (
+    <li>
+      <span className="pq-text">“{text}”</span>
+      <span className="flag-actions">
+        <button
+          type="button"
+          className="add strong"
+          onClick={async () => {
+            try {
+              await navigator.clipboard.writeText(post);
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1600);
+            } catch {
+              /* clipboard blocked */
+            }
+          }}
+        >
+          {copied ? 'copied' : 'copy for a social post'}
+        </button>
+        <a className="add" href={`https://x.com/intent/post?text=${encodeURIComponent(post)}`} target="_blank" rel="noopener noreferrer">
+          post on X
+        </a>
+        <span className={`small ${len > 280 ? 'over' : 'muted'}`}>{len} characters{len > 280 ? ' (too long for X)' : ''}</span>
+      </span>
+    </li>
+  );
+}
 
 export default function Humanizer({ p }: { p: P }) {
   const router = useRouter();
@@ -32,6 +80,7 @@ export default function Humanizer({ p }: { p: P }) {
   const hash = p.hash;
   const [open, setOpen] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState<string[]>(p.dismissed);
+  const [asking, setAsking] = useState<string | null>(null); // which flag has its "tell AI how" box open
   const [note, setNote] = useState('');
   const [pending, start] = useTransition();
   const [busy, setBusy] = useState('');
@@ -43,6 +92,7 @@ export default function Humanizer({ p }: { p: P }) {
   const current = !!qc && qcHash === hash;
   const canPublish = current && !!qc?.passed && !!featured;
   const live = p.status === 'published';
+  const quotes = useMemo(() => pullQuotes(p.html), [p.html]);
 
   // A flag is open while its passage is still in the text and you haven't set it aside.
   const text = useMemo(() => norm(p.title + '\n' + plainText(p.html)), [p.title, p.html]);
@@ -67,6 +117,16 @@ export default function Humanizer({ p }: { p: P }) {
     }
     return html;
   }, [p.html, qc, allOpen]);
+
+  const done = (r: { error?: string; note?: string; missed?: number }, fallback: string) => {
+    if (r.error) {
+      setError(r.error);
+      return false;
+    }
+    setNote(`${r.note || fallback}${r.missed ? ` (${r.missed} edit${r.missed === 1 ? '' : 's'} could not be placed.)` : ''} Run the Humanizer again when you're done.`);
+    router.refresh();
+    return true;
+  };
 
   const run = () =>
     start(async () => {
@@ -93,19 +153,43 @@ export default function Humanizer({ p }: { p: P }) {
       router.refresh();
     });
 
-  const letAiFix = (flags: { check: string; quote: string; issue: string; fix?: string }[], tag: string) =>
+  const letAiFix = (flags: F[], tag: string) =>
     start(async () => {
       setBusy(tag);
       setError('');
       setNote('');
       const r = await aiFix(p.id, flags);
       setBusy('');
+      done(r as never, 'Fixed.');
+    });
+
+  const instruct = (instruction: string, flag?: F, tag = 'instruct') =>
+    new Promise<boolean>((resolve) =>
+      start(async () => {
+        setBusy(tag);
+        setError('');
+        setNote('');
+        const r = await aiInstruct(p.id, instruction, flag);
+        setBusy('');
+        const ok = done(r as never, 'Done.');
+        if (ok) setAsking(null);
+        resolve(ok);
+      }),
+    );
+
+  const toQuote = (f: F, tag: string) =>
+    start(async () => {
+      setBusy(tag);
+      setError('');
+      const r = await makePullQuote(p.id, f);
+      setBusy('');
       if ('error' in r && r.error) return setError(r.error);
-      setNote(`${r.note || 'Fixed.'}${r.missed ? ` (${r.missed} edit${r.missed === 1 ? '' : 's'} could not be placed.)` : ''} Run the Humanizer again when you're done.`);
+      setDismissed((d) => [...d, f.quote]);
+      setNote('Made it a pull quote. It sits after its paragraph and is listed under Publishing for social posts.');
       router.refresh();
     });
 
-  const leave = (f: { check: string; quote: string; issue: string }) =>
+  const leave = (f: F) =>
     start(async () => {
       setDismissed((d) => [...d, f.quote]);
       await dismissFlag(p.id, f);
@@ -119,6 +203,18 @@ export default function Humanizer({ p }: { p: P }) {
     });
   };
 
+  const pickFeatured = async () => {
+    try {
+      const idImg = await pickAndUploadImage();
+      if (idImg) {
+        setFeatured(idImg);
+        await saveDetails({ featured: idImg });
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'The image could not be added.');
+    }
+  };
+
   const doPublish = () =>
     start(async () => {
       setBusy('publish');
@@ -129,6 +225,53 @@ export default function Humanizer({ p }: { p: P }) {
       if ('error' in r && r.error) return setError(r.error);
       router.refresh();
     });
+
+  const publishBox = (
+    <div className="publish-box">
+      <span className="o-label">Publishing</span>
+      <div className={`feature-pick${featured ? '' : ' empty'}`}>
+        {featured ? (
+          <img src={`/img/${featured}`} alt="Featured image" />
+        ) : (
+          <button type="button" className="feature-drop" onClick={pickFeatured}>
+            + Add the featured image
+            <span className="small muted">Shown at the top of the post and on shared links. Needed to publish.</span>
+          </button>
+        )}
+        {featured && (
+          <button type="button" className="add" onClick={pickFeatured}>replace image</button>
+        )}
+      </div>
+      <label className="small muted" htmlFor="ex">Excerpt (on the blog&apos;s list page and shared links)</label>
+      <textarea id="ex" className="field" rows={3} value={excerpt} onChange={(e) => setExcerpt(e.target.value)} onBlur={() => saveDetails()} />
+      <label className="small muted" htmlFor="tg">Tags, separated by commas</label>
+      <input id="tg" className="field" value={tags} onChange={(e) => setTags(e.target.value)} onBlur={() => saveDetails()} />
+      <div className="actions">
+        <button type="button" className="btn" disabled={!canPublish || pending} onClick={doPublish}>
+          {busy === 'publish' ? 'Publishing…' : live ? (p.liveOutOfDate ? 'Update the live post' : 'Publish again') : 'Publish'}
+        </button>
+        {live && p.slug && <a className="quiet-btn" href={`/writing/${p.slug}`} target="_blank" rel="noreferrer">View on the blog</a>}
+        {live && <button type="button" className="add" disabled={pending} onClick={() => start(async () => { await unpublish(p.id); router.refresh(); })}>unpublish</button>}
+      </div>
+      {!canPublish && (
+        <p className="small muted">
+          To publish: {[!qc || !current ? 'run the Humanizer on the current text' : '', current && qc && !qc.passed ? `reach ${OVERALL_MIN}+ overall and ${CHECK_MIN}+ on each check` : '', !featured ? 'add the featured image' : ''].filter(Boolean).join('; ')}.
+        </p>
+      )}
+      {live && p.liveOutOfDate && <p className="small muted">Readers still see the last published version until you update it.</p>}
+
+      {quotes.length > 0 && (
+        <div className="pq-list">
+          <span className="o-label">Pull quotes, ready for social posts</span>
+          <ul>
+            {quotes.map((q, i) => (
+              <QuoteCard key={i} text={q} path={live && p.slug ? `/writing/${p.slug}` : null} />
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <div className="hum">
@@ -153,6 +296,17 @@ export default function Humanizer({ p }: { p: P }) {
         </div>
         {qc && !current && <p className="notice">The text changed since this run. Run it again to publish.</p>}
         {qc?.summary && <p className="hum-summary">{qc.summary}</p>}
+
+        {/* Ready to go: publishing comes first. */}
+        {current && qc?.passed && publishBox}
+
+        {p.html && (
+          <div className="instruct-wrap">
+            <span className="o-label">Tell the AI what to change</span>
+            <Instruct busy={busy === 'instruct'} disabled={pending} onSend={(t) => instruct(t)} />
+          </div>
+        )}
+
         {allOpen.length > 0 && (
           <div className="fix-all">
             <button type="button" className="btn" disabled={pending} onClick={() => letAiFix(allOpen, 'all')}>
@@ -162,100 +316,81 @@ export default function Humanizer({ p }: { p: P }) {
           </div>
         )}
         {note && <p className="notice">{note}</p>}
-
-        {qc?.checks.map((c) => (
-          <div key={c.key} className={`check ${open === c.key ? 'open' : ''}`}>
-            <button type="button" className="check-head" onClick={() => setOpen(open === c.key ? null : c.key)} aria-expanded={open === c.key}>
-              <span className="check-name">{c.name}{!c.gate && <em> · advice</em>}</span>
-              <span className="bar"><span style={{ width: `${c.score}%` }} className={c.gate && c.score < CHECK_MIN ? 'low' : ''} /></span>
-              <span className="check-score">{c.score}</span>
-            </button>
-            {open === c.key && (
-              <div className="check-body">
-                <p>{c.summary}</p>
-                {c.flags.length === 0 && <p className="muted">Nothing to fix here.</p>}
-                {c.flags.some((f) => state(f.quote) === 'open') && c.flags.filter((f) => state(f.quote) === 'open').length > 1 && (
-                  <button
-                    type="button"
-                    className="add"
-                    disabled={pending}
-                    onClick={() => letAiFix(c.flags.filter((f) => state(f.quote) === 'open').map((f) => ({ check: c.name, ...f })), c.key)}
-                  >
-                    {busy === c.key ? 'fixing…' : `let AI fix all ${c.flags.filter((f) => state(f.quote) === 'open').length} here`}
-                  </button>
-                )}
-                <ul>
-                  {c.flags.map((f, i) => {
-                    const st = state(f.quote);
-                    const tag = `${c.key}-${i}`;
-                    return (
-                      <li key={i} className={st !== 'open' ? 'done' : ''}>
-                        <q>{f.quote}</q>
-                        <span>{f.issue}</span>
-                        {f.fix && st === 'open' && (
-                          <span className="fix">
-                            <em>{f.fix}</em>
-                          </span>
-                        )}
-                        {st === 'open' ? (
-                          <span className="flag-actions">
-                            <button type="button" className="add strong" disabled={pending} onClick={() => letAiFix([{ check: c.name, ...f }], tag)}>
-                              {busy === tag ? 'fixing…' : 'let AI fix this'}
-                            </button>
-                            {f.fix && (
-                              <button type="button" className="add" disabled={pending} onClick={() => fix(f.quote, f.fix!)}>use the suggestion</button>
-                            )}
-                            <button type="button" className="add" disabled={pending} onClick={() => leave({ check: c.name, ...f })}>leave it</button>
-                          </span>
-                        ) : (
-                          <span className="muted small">{st === 'left' ? 'left as it is' : '✓ changed'}</span>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            )}
-          </div>
-        ))}
-
-        <div className="publish-box">
-          <span className="o-label">Publishing</span>
-          <div className="feature-pick">
-            {featured ? <img src={`/img/${featured}`} alt="Featured image" /> : <span className="muted">No featured image yet</span>}
-            <button
-              type="button"
-              className="add"
-              onClick={async () => {
-                try {
-                  const idImg = await pickAndUploadImage();
-                  if (idImg) {
-                    setFeatured(idImg);
-                    await saveDetails({ featured: idImg });
-                  }
-                } catch (e) {
-                  setError(e instanceof Error ? e.message : 'The image could not be added.');
-                }
-              }}
-            >
-              {featured ? 'replace image' : '+ featured image'}
-            </button>
-          </div>
-          <label className="small muted" htmlFor="ex">Excerpt (on the blog's list page)</label>
-          <textarea id="ex" className="field" rows={3} value={excerpt} onChange={(e) => setExcerpt(e.target.value)} onBlur={() => saveDetails()} />
-          <label className="small muted" htmlFor="tg">Tags, separated by commas</label>
-          <input id="tg" className="field" value={tags} onChange={(e) => setTags(e.target.value)} onBlur={() => saveDetails()} />
-          <div className="actions">
-            <button type="button" className="btn" disabled={!canPublish || pending} onClick={doPublish}>
-              {busy === 'publish' ? 'Publishing…' : live ? (p.liveOutOfDate ? 'Update the live post' : 'Publish again') : 'Publish'}
-            </button>
-            {live && p.slug && <a className="quiet-btn" href={`/writing/${p.slug}`} target="_blank" rel="noreferrer">View on the blog</a>}
-            {live && <button type="button" className="add" disabled={pending} onClick={() => start(async () => { await unpublish(p.id); router.refresh(); })}>unpublish</button>}
-          </div>
-          {!featured && current && qc?.passed && <p className="small muted">Add a featured image to publish.</p>}
-          {live && p.liveOutOfDate && <p className="small muted">Readers still see the last published version until you update it.</p>}
-        </div>
         {error && <p className="notice error">{error}</p>}
+
+        {qc?.checks.map((c) => {
+          const openHere = c.flags.filter((f) => state(f.quote) === 'open');
+          return (
+            <div key={c.key} className={`check ${open === c.key ? 'open' : ''}`}>
+              <button type="button" className="check-head" onClick={() => setOpen(open === c.key ? null : c.key)} aria-expanded={open === c.key}>
+                <span className="check-name">{c.name}{!c.gate && <em> · advice</em>}</span>
+                <span className="bar"><span style={{ width: `${c.score}%` }} className={c.gate && c.score < CHECK_MIN ? 'low' : ''} /></span>
+                <span className="check-score">{c.score}</span>
+              </button>
+              {open === c.key && (
+                <div className="check-body">
+                  <p>{c.summary}</p>
+                  {c.flags.length === 0 && <p className="muted">Nothing to fix here.</p>}
+                  {openHere.length > 1 && (
+                    <button type="button" className="add" disabled={pending} onClick={() => letAiFix(openHere.map((f) => ({ check: c.name, ...f })), c.key)}>
+                      {busy === c.key ? 'fixing…' : `let AI fix all ${openHere.length} here`}
+                    </button>
+                  )}
+                  <ul>
+                    {c.flags.map((f, i) => {
+                      const st = state(f.quote);
+                      const tag = `${c.key}-${i}`;
+                      const flag = { check: c.name, ...f };
+                      return (
+                        <li key={i} className={st !== 'open' ? 'done' : ''}>
+                          <q>{f.quote}</q>
+                          <span>{f.issue}</span>
+                          {f.fix && st === 'open' && (
+                            <span className="fix">
+                              <em>{f.fix}</em>
+                            </span>
+                          )}
+                          {st === 'open' ? (
+                            <>
+                              <span className="flag-actions">
+                                <button type="button" className="add strong" disabled={pending} onClick={() => letAiFix([flag], tag)}>
+                                  {busy === tag ? 'fixing…' : 'let AI fix this'}
+                                </button>
+                                <button type="button" className="add" disabled={pending} onClick={() => setAsking(asking === tag ? null : tag)}>
+                                  tell AI how
+                                </button>
+                                {f.fix && (
+                                  <button type="button" className="add" disabled={pending} onClick={() => fix(f.quote, f.fix!)}>use the suggestion</button>
+                                )}
+                                <button type="button" className="add" disabled={pending} onClick={() => toQuote(flag, `pq-${tag}`)}>
+                                  {busy === `pq-${tag}` ? 'moving…' : 'make it a pull quote'}
+                                </button>
+                                <button type="button" className="add" disabled={pending} onClick={() => leave(flag)}>leave it</button>
+                              </span>
+                              {asking === tag && (
+                                <Instruct
+                                  compact
+                                  busy={busy === `ask-${tag}`}
+                                  disabled={pending}
+                                  placeholder="What should the AI do with this passage?"
+                                  onSend={(t) => instruct(t, flag, `ask-${tag}`)}
+                                />
+                              )}
+                            </>
+                          ) : (
+                            <span className="muted small">{st === 'left' ? 'left as it is' : '✓ changed'}</span>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {!(current && qc?.passed) && publishBox}
       </aside>
     </div>
   );

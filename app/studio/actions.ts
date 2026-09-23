@@ -409,6 +409,59 @@ export async function aiFix(id: string, flags: FlagIn[]) {
   return { ok: true, applied, missed: missed.length, note: out.note, hash: r.hash };
 }
 
+/** Your own instruction to the AI, for the whole piece or about one flagged passage. */
+export async function aiInstruct(id: string, instruction: string, flag?: FlagIn) {
+  await requireOwner();
+  const what = instruction.trim();
+  if (!what) return { error: 'Tell the AI what to do first.' };
+  const issue: FlagIn = flag
+    ? { check: "Kobus's instruction", quote: flag.quote, issue: `${what} (This is about a passage the reviewer flagged for: ${flag.issue})` }
+    : { check: "Kobus's instruction", quote: '(the whole post)', issue: what };
+  const r = await aiFix(id, [issue]);
+  const [p] = await sql`select source_id from app.posts where id = ${id}`;
+  await logIteration('instruction', { postId: id, sourceId: p?.source_id, meta: { instruction: what, about: flag ? quoteText(flag.quote) : null, done: 'ok' in r } });
+  return r;
+}
+
+/** Lifts a flagged sentence out of the text into a pull quote placed after its paragraph. */
+export async function makePullQuote(id: string, flag: FlagIn) {
+  await requireOwner();
+  const post = await getPost(id);
+  const doc = docOf(post);
+  const q = quoteText(flag.quote);
+  const blocks = [doc.intro, ...doc.points.flatMap((p) => [p, ...p.forks]), doc.outro, doc.conclusion];
+  let done = false;
+  for (const b of blocks) {
+    if (!b.body.trim()) continue;
+    const md = htmlToMarkdown(b.body);
+    let at = md.indexOf(q);
+    if (at < 0) at = norm(md).indexOf(norm(q));
+    if (at < 0) continue;
+    const end = md.indexOf('\n\n', at + q.length);
+    const cut = end < 0 ? md.length : end;
+    const before = md.slice(0, at);
+    const rest = md.slice(at + q.length, cut);
+    const para = (before + rest).replace(/ {2,}/g, ' ').replace(/ ([,.;:!?])/g, '$1').replace(/[,;:]([.!?])/g, '$1');
+    const next = `${para.trim() ? para + '\n\n' : ''}<aside class="pull-quote">${escHtml(q)}</aside>${md.slice(cut)}`;
+    b.body = markdownToHtml(next);
+    done = true;
+    break;
+  }
+  if (!done) return { error: 'That passage could not be found. In Writing, select the words and press "Pull quote".' };
+  const r = await saveDoc(id, doc);
+  await sql`update app.posts set qc_dismissed = array_append(qc_dismissed, ${flag.quote}) where id = ${id}`;
+  await logIteration('pull_quote', { postId: id, sourceId: post.source_id, meta: { quote: q, flagged_for: flag.issue } });
+  return { ok: true, hash: r.hash };
+}
+
+/** The picture at the top of the post and on shared links. */
+export async function setFeatured(id: string, imageId: string | null) {
+  await requireOwner();
+  const [row] = await sql`update app.posts set featured_image_id = ${imageId}, updated_at = now() where id = ${id} returning status, slug`;
+  if (row?.status === 'published') refreshPublic(row.slug);
+  return { ok: true };
+}
+
 /** "Leave it": the reviewer was wrong about this one. The weekly pass learns from it. */
 export async function dismissFlag(id: string, flag: FlagIn) {
   await requireOwner();

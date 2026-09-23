@@ -20,7 +20,7 @@ export function norm(s: string): string {
 /** Plain text of stored HTML, for "is this passage still there?" checks. */
 export function plainText(html: string): string {
   return html
-    .replace(/<\/(p|h[1-6]|blockquote)>/g, '\n')
+    .replace(/<\/(p|h[1-6]|blockquote|aside)>/g, '\n')
     .replace(/<br\s*\/?>/g, '\n')
     .replace(/<[^>]+>/g, '')
     .replace(/&nbsp;/g, ' ')
@@ -49,4 +49,11 @@ export function openFlags(qc: HumanizerResult | null, title: string, html: strin
       out.push({ key: `${c.key}:${f.quote}`, check: c.name, quote: f.quote, issue: f.issue, fix: f.fix });
     }
   return out;
+}
+
+/** The pull quotes in a piece, as plain text (for social posts). */
+export function pullQuotes(html: string): string[] {
+  return Array.from((html || '').matchAll(/<aside class="pull-quote">([\s\S]*?)<\/aside>/g))
+    .map((m) => plainText(m[1]).trim())
+    .filter(Boolean);
 }

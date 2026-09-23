@@ -5,6 +5,7 @@ import { useEditor, EditorContent, type Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Image from '@tiptap/extension-image';
 import Placeholder from '@tiptap/extension-placeholder';
+import { PullQuote } from './pullQuote';
 import { FlagHighlight, flagKey, type FlagMark } from './flagHighlight';
 
 /** The prose under one heading. Reports itself when focused so the one formatting bar can act on it. */
@@ -37,9 +38,10 @@ export default function BodyEditor({
         strike: false,
         underline: false,
         horizontalRule: false,
-        link: false,
+        link: { openOnClick: false, autolink: true, defaultProtocol: 'https', protocols: ['mailto'] },
       }),
       Image.configure({ inline: false }),
+      PullQuote,
       Placeholder.configure({ placeholder }),
       FlagHighlight.configure({ get: () => flagsRef.current }),
     ],

@@ -361,3 +361,38 @@ textarea.flagged-field { text-decoration: underline wavy #b8862b; text-decoratio
 .share a:hover, .share button:hover, .share a:focus-visible, .share button:focus-visible { color: var(--ink); text-decoration: underline; }
 @media print { .share, .w-notes { display: none; } }
 .o-cue { display: block; font-style: italic; margin: -2px 0 4px; }
+
+/* ---------- Pull quotes (blog and editor) ---------- */
+.prose aside.pull-quote, .body-editor aside.pull-quote {
+  display: block; margin: 1.8em 0; padding: 0.9em 0; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--ink);
+  font-size: 1.35em; line-height: 1.4; color: var(--navy); text-align: center; font-weight: 700;
+}
+.body-editor aside.pull-quote { position: relative; }
+.body-editor aside.pull-quote::before { content: 'Pull quote'; position: absolute; top: -0.9em; left: 0; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; font-weight: 400; color: var(--ink-soft); background: var(--paper); padding-right: 6px; }
+.prose a, .body-editor a { color: var(--navy); text-decoration: underline; text-underline-offset: 3px; }
+
+.pq-list { margin-top: 18px; }
+.pq-list ul { list-style: none; margin: 6px 0 0; padding: 0; }
+.pq-list li { display: flex; flex-direction: column; gap: 4px; padding: 10px 0; border-top: 1px dashed var(--rule); }
+.pq-text { font-weight: 700; color: var(--navy); line-height: 1.45; }
+.over { color: var(--fail); }
+
+/* ---------- Links ---------- */
+.link-field { display: inline-flex; gap: 4px; align-items: center; margin-left: 8px; }
+.link-field input { min-height: 34px; width: min(22rem, 36vw); padding: 0 10px; border: 1px solid var(--navy); border-radius: 3px; background: #fff; font: inherit; font-size: 0.85rem; }
+.link-field button { border: 1px solid var(--rule) !important; }
+
+/* ---------- Featured image ---------- */
+.w-featured { margin: 0 0 18px; }
+.w-featured img { display: block; width: 100%; max-height: 320px; object-fit: cover; border-radius: 3px; }
+.w-featured-actions { display: flex; gap: 14px; align-items: center; margin-top: 6px; }
+.feature-drop { appearance: none; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; padding: 16px 18px; border: 1px dashed var(--ink-soft); border-radius: 3px; background: rgba(255, 255, 255, 0.3); font: inherit; color: var(--navy); cursor: pointer; text-align: left; }
+.feature-drop:hover { border-color: var(--navy); background: rgba(255, 255, 255, 0.55); }
+.feature-pick.empty { display: block; }
+
+/* ---------- Tell the AI ---------- */
+.instruct-wrap { margin: 12px 0 14px; }
+.instruct { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; margin-top: 4px; }
+.instruct textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 3px; background: rgba(255, 255, 255, 0.45); font: inherit; font-size: 0.88rem; line-height: 1.45; resize: vertical; }
+.instruct textarea:focus { outline: none; border-color: var(--navy); }
+.instruct.compact textarea { font-size: 0.84rem; }

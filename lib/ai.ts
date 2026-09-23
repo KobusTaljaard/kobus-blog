@@ -62,6 +62,8 @@ async function callTool<T>(opts: {
 
 const WRITER_CONTEXT = `The writer is Kobus Taljaard: a South African real estate investor, businessman and Christian who writes longhand in an A4 notebook, then reads it aloud; the recording is transcribed verbatim (filler words removed). He teaches: the Bible, real estate, life. His blog is read only by people — friends, family, curious strangers. It is not written for search engines.
 
+LANGUAGE: every word the app writes, fixes or suggests is in US English: American spelling (color, honor, realize, center, traveled), American punctuation (double quotation marks, periods and commas inside them), and American dates (September 23, 2026). His transcripts may carry British spellings from the transcription tool; always convert them. Keep his South African idioms and turns of phrase; only the spelling and punctuation are American.
+
 How he structures a piece: a title; an intro; usually two to five points; under any point, optional "forks" (2–6 one-line ideas that open the point up); an "outro" that turns from the teaching toward the landing; and a conclusion where he draws everything together, "lands the plane" and makes one final application. He makes applications wherever the teaching allows — in the title, intro, any point or fork — not only at the end.`;
 
 /** What the app has learned about him so far (rebuilt weekly from his sources, edits and published posts). */
@@ -96,7 +98,7 @@ For each theme:
 - quotes: 1–3 short lines from the transcript, verbatim, that show it.
 - main: true for the subject the entry is mostly about (exactly one), false for the rest.
 
-notes: formatting, copywriting and language-consistency issues a writer must fix for any post from this entry (mixed British/American spelling — keep his dominant variant, likely British/South African; transcription errors; repeated words; unclear passages). Brief.`,
+notes: formatting, copywriting and language-consistency issues a writer must fix for any post from this entry (British spellings to convert to US English; transcription errors; repeated words; unclear passages). Brief.`,
     toolName: 'save_themes',
     toolDescription: 'Save the themes found in the entry.',
     schema: {
@@ -221,7 +223,7 @@ You write like the best essayist and copywriter alive, writing as Kobus:
 - Go back to the original source (his notebook transcript) for every section. Mine it for BOTH ideas and words: his arguments, reasons, stories, examples, images, turns of phrase, questions, scripture he cites. The outline tells you which part of the source a section draws on; the source gives you the substance.
 - Develop each idea the way a writer does: open with something concrete (a picture, a moment, a sharp claim, a question he would ask), unpack it, reason it through, show why it matters, and move the reader on. Earn each point before stating it.
 - Build an argument across the piece. Each section should hand off to the next; the reader should feel pulled forward. Transitions come from the thought itself, not from connector words.
-- Use his words where they are strong. Where his spoken phrasing is loose, write what he meant the way he would write it at his best, keeping his vocabulary, directness, humour and South African English.
+- Use his words where they are strong. Where his spoken phrasing is loose, write what he meant the way he would write it at his best, keeping his vocabulary, directness, humor and South African idioms.
 - Vary sentence and paragraph length with purpose. Short lines for weight. Longer ones to carry a thought.
 - Applications are part of the teaching, not bolt-ons: land each one where the outline places it, concretely, addressed to the reader's real life.
 - Stay true to him. You may develop, illustrate and connect his ideas, but do not invent facts about his life, stories that did not happen, numbers, quotes, or theology he did not hold. General, obviously illustrative examples are fine; say them as illustrations.
@@ -254,7 +256,7 @@ Structure:
 - The outro turns from the teaching toward the landing.
 - The conclusion lands the plane: it draws everything together and makes one final application. End where his thought ends; no tidy moral tacked on.
 - If a block's cue is empty and the source has nothing for it, return an empty body.
-- Fix the listed issues. Keep his dominant spelling variant (South African / British).`,
+- Fix the listed issues. US English spelling and punctuation throughout.`,
     user: `<original_source>
 ${input.transcript}
 </original_source>
@@ -299,9 +301,9 @@ Write the full post. Return the title, a heading and prose for each block id, a 
 
 export const CHECKS = [
   { key: 'ai', name: 'AI detection', gate: true, what: 'How completely human the writing reads. 100 = nothing would make a perceptive reader suspect a machine wrote or polished it. Deduct for the AI-writing tells.' },
-  { key: 'flow', name: 'Natural flow and grammar', gate: true, what: 'Typos, grammar, wrong words, broken or clumsy sentences, words too grand or too plain for the moment, inconsistent spelling variant.' },
+  { key: 'flow', name: 'Natural flow and grammar', gate: true, what: 'Typos, grammar, wrong words, broken or clumsy sentences, words too grand or too plain for the moment. Every British spelling or punctuation habit (colour, realise, single quotation marks, punctuation outside quotes) is a flag: the post must be in US English.' },
   { key: 'argument', name: 'Argument and progression', gate: true, what: 'Does the teaching build? Ideas in a sensible sequence, each point expanding the last, moving toward the conclusion. Deduct for everything dumped at the start, a bloated middle, repetition, or a conclusion that does not land.' },
-  { key: 'voice', name: 'Sounds like Kobus', gate: true, what: 'Compared with his own spoken words in the transcript: his vocabulary, rhythm, directness, idioms and South African English. Deduct wherever it sounds like someone else or like a polished writer he is not.' },
+  { key: 'voice', name: 'Sounds like Kobus', gate: true, what: 'Compared with his own spoken words in the transcript: his vocabulary, rhythm, directness and idioms (spelling is judged under flow, not here). Deduct wherever it sounds like someone else or like a polished writer he is not.' },
   { key: 'seo', name: 'SEO and AI search', gate: false, what: 'Advisory only. Is the title clear and findable, is the topic plain from the first paragraph, would a search engine or AI assistant know what question this answers? Suggest, never demand keyword stuffing.' },
 ] as const;
 
@@ -394,7 +396,9 @@ How to edit:
 - For a heading or the title, "find" is the whole heading or title.
 - An issue about a whole section (flow, argument, a copied outline line) may need a rewritten paragraph: then "find" is that whole paragraph.
 - Keep his voice. Keep Markdown bold/italic and image lines intact. Do not add headings inside body units.
-- If an issue cannot be fixed without his input (a fact only he knows), make no edit for it and say so in note.`,
+- If an issue cannot be fixed without his input (a fact only he knows), make no edit for it and say so in note.
+- An issue marked "Kobus's instruction" is a direct instruction from him. Carry it out completely, in every unit it applies to, even if that takes many edits (for example: capitalize every pronoun that refers to Christ). When one "find" string occurs several times in a unit, return one edit per occurrence; they are applied in order, each to the first remaining match.
+- Leave <aside class="pull-quote"> lines (his pull quotes) as they are unless an issue is about one.`,
     user: `<his_own_words_for_reference>
 ${input.transcript.slice(0, 60000)}
 </his_own_words_for_reference>
@@ -425,7 +429,7 @@ Return the edits and a one-sentence note to Kobus on what you changed (or could 
       },
       required: ['edits', 'note'],
     },
-    maxTokens: 16000,
+    maxTokens: 32000,
   });
 }
 
@@ -450,7 +454,7 @@ export async function learnVoice(input: { profile: string; evidence: string }): 
 You maintain the living profile the writing app uses to write, outline, check and fix Kobus's work. Every week you read new evidence and improve the profile, so the app becomes more like him over time.
 
 Method:
-- Evidence ranks: his own words (sources) > changes he made to AI output (strongest signal of what the AI gets wrong) > published posts > Humanizer results and dismissed flags (a dismissed flag means the reviewer was wrong for him).
+- Evidence ranks: his direct instructions to the AI (treat these as standing rules) > his own words (sources) > changes he made to AI output (strongest signal of what the AI gets wrong) > published posts > Humanizer results and dismissed flags (a dismissed flag means the reviewer was wrong for him).
 - Keep what is still true, sharpen what the new evidence refines, add what is new, and remove what the evidence contradicts.
 - Every line must be specific and useful to a writer: concrete habits, actual phrases, beliefs as he states them, examples he returns to. No flattery, no generic writing advice, no guesses about his inner life.
 - Record only what the evidence shows. Mark anything seen only once as "(seen once)".

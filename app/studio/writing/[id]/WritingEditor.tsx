@@ -10,10 +10,54 @@ import AutoText from '../../_ui/AutoText';
 import { SaveStatus, useAutosave } from '../../_ui/useAutosave';
 import PrintButton from '../../_ui/PrintButton';
 import { pickAndUploadImage } from '../../_ui/images';
-import { aiFix, dismissFlag, writeIt } from '../../actions';
+import { aiFix, aiInstruct, dismissFlag, makePullQuote, setFeatured, writeIt } from '../../actions';
+import Instruct from '../../_ui/Instruct';
 import BodyEditor from './BodyEditor';
+import { pullQuote } from './pullQuote';
+
+function LinkField({ editor, onDone }: { editor: Editor; onDone: () => void }) {
+  const [url, setUrl] = useState<string>(editor.getAttributes('link').href || '');
+  const apply = () => {
+    let href = url.trim();
+    const chain = editor.chain().focus().extendMarkRange('link');
+    if (!href) {
+      chain.unsetLink().run();
+      return onDone();
+    }
+    if (!/^(https?:|mailto:|\/)/i.test(href)) href = href.includes('@') && !href.includes('/') ? `mailto:${href}` : `https://${href}`;
+    if (editor.state.selection.empty && !editor.isActive('link')) {
+      // Nothing selected: put the address itself in as the link text.
+      editor.chain().focus().insertContent({ type: 'text', text: href.replace(/^mailto:/, ''), marks: [{ type: 'link', attrs: { href } }] }).run();
+    } else {
+      chain.setLink({ href }).run();
+    }
+    onDone();
+  };
+  return (
+    <span className="link-field">
+      <input
+        autoFocus
+        value={url}
+        placeholder="Paste a web address…"
+        onChange={(e) => setUrl(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            apply();
+          }
+          if (e.key === 'Escape') onDone();
+        }}
+      />
+      <button type="button" onClick={apply}>Apply</button>
+      {editor.isActive('link') && (
+        <button type="button" onClick={() => { editor.chain().focus().extendMarkRange('link').unsetLink().run(); onDone(); }}>Remove</button>
+      )}
+    </span>
+  );
+}
 
 function Toolbar({ editor, onImage, busy }: { editor: Editor | null; onImage: () => void; busy: boolean }) {
+  const [linking, setLinking] = useState(false);
   const s = useEditorState({
     editor,
     selector: ({ editor: e }) => ({
@@ -24,6 +68,8 @@ function Toolbar({ editor, onImage, busy }: { editor: Editor | null; onImage: ()
       h4: !!e?.isActive('heading', { level: 4 }),
       p: !!e?.isActive('paragraph'),
       q: !!e?.isActive('blockquote'),
+      pq: !!e?.isActive('pullQuote'),
+      link: !!e?.isActive('link'),
     }),
   });
   const c = () => editor?.chain().focus();
@@ -36,14 +82,57 @@ function Toolbar({ editor, onImage, busy }: { editor: Editor | null; onImage: ()
     <div className="fmt" role="toolbar" aria-label="Formatting">
       {btn(<b>B</b>, s?.b, () => c()?.toggleBold().run(), 'Bold (⌘B)')}
       {btn(<i>I</i>, s?.i, () => c()?.toggleItalic().run(), 'Italic (⌘I)')}
+      {btn('Link', s?.link, () => setLinking((v) => !v), 'Link the selected words to a web address')}
       <span className="sep" />
       {btn('Text', s?.p, () => c()?.setParagraph().run(), 'Normal text')}
       {btn('H2', s?.h2, () => c()?.toggleHeading({ level: 2 }).run(), 'Heading')}
       {btn('H3', s?.h3, () => c()?.toggleHeading({ level: 3 }).run(), 'Subheading')}
       {btn('H4', s?.h4, () => c()?.toggleHeading({ level: 4 }).run(), 'Small heading')}
-      {btn('“ ”', s?.q, () => c()?.toggleBlockquote().run(), 'Quote')}
+      {btn('“ ”', s?.q, () => c()?.toggleBlockquote().run(), 'Quote (someone else’s words)')}
+      {btn('Pull quote', s?.pq, () => editor && pullQuote(editor), 'Select words to lift them out as a stand-out pull quote, or click in a paragraph to turn it into one')}
       <span className="sep" />
-      {btn(busy ? '…' : 'Image', false, onImage, 'Insert an image')}
+      {btn(busy ? '…' : 'Image', false, onImage, 'Insert an image in the text')}
+      {linking && editor && <LinkField editor={editor} onDone={() => setLinking(false)} />}
+    </div>
+  );
+}
+
+function Featured({ id, initial }: { id: string; initial: string | null }) {
+  const [img, setImg] = useState(initial);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const pick = async () => {
+    setBusy(true);
+    setErr('');
+    try {
+      const got = await pickAndUploadImage();
+      if (got) {
+        setImg(got);
+        await setFeatured(id, got);
+      }
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'The image could not be added.');
+    }
+    setBusy(false);
+  };
+  return (
+    <div className="w-featured no-print">
+      {img ? (
+        <>
+          <img src={`/img/${img}`} alt="Featured image" />
+          <span className="w-featured-actions">
+            <span className="app-tag">Featured image</span>
+            <button type="button" className="add" disabled={busy} onClick={pick}>{busy ? 'uploading…' : 'replace'}</button>
+            <button type="button" className="add danger" disabled={busy} onClick={async () => { setImg(null); await setFeatured(id, null); }}>remove</button>
+          </span>
+        </>
+      ) : (
+        <button type="button" className="feature-drop" disabled={busy} onClick={pick}>
+          {busy ? 'Uploading…' : '+ Featured image'}
+          <span className="small muted">The picture at the top of the post and on shared links. Needed to publish.</span>
+        </button>
+      )}
+      {err && <p className="notice error">{err}</p>}
     </div>
   );
 }
@@ -68,6 +157,8 @@ function Notes({
   onFix,
   onLeave,
   onClose,
+  onInstruct,
+  onQuote,
 }: {
   flags: OpenFlag[];
   busy: string;
@@ -75,7 +166,10 @@ function Notes({
   onFix: (f: OpenFlag[], tag: string) => void;
   onLeave: (f: OpenFlag) => void;
   onClose: () => void;
+  onInstruct: (text: string, f: OpenFlag | undefined, tag: string) => Promise<boolean>;
+  onQuote: (f: OpenFlag) => void;
 }) {
+  const [asking, setAsking] = useState<string | null>(null);
   const show = (f: OpenFlag) => {
     const el =
       document.querySelector(`[data-flag="${CSS.escape(f.key)}"]`) ||
@@ -90,6 +184,10 @@ function Notes({
       <div className="w-notes-head">
         <b>Humanizer notes</b>
         <button type="button" className="add" onClick={onClose} aria-label="Close">close</button>
+      </div>
+      <div className="instruct-wrap">
+        <span className="o-label">Tell the AI what to change</span>
+        <Instruct compact busy={busy === 'instruct'} disabled={pending} onSend={(t) => onInstruct(t, undefined, 'instruct')} />
       </div>
       {flags.length === 0 ? (
         <p className="small muted">Nothing open. Run the Humanizer again when you&apos;re happy.</p>
@@ -110,8 +208,25 @@ function Notes({
                   <button type="button" className="add strong" disabled={pending} onClick={() => onFix([f], f.key)}>
                     {busy === f.key ? 'fixing…' : 'let AI fix this'}
                   </button>
+                  <button type="button" className="add" disabled={pending} onClick={() => setAsking(asking === f.key ? null : f.key)}>tell AI how</button>
+                  <button type="button" className="add" disabled={pending} onClick={() => onQuote(f)}>
+                    {busy === `pq-${f.key}` ? 'moving…' : 'make it a pull quote'}
+                  </button>
                   <button type="button" className="add" disabled={pending} onClick={() => onLeave(f)}>leave it</button>
                 </span>
+                {asking === f.key && (
+                  <Instruct
+                    compact
+                    busy={busy === `ask-${f.key}`}
+                    disabled={pending}
+                    placeholder="What should the AI do with this passage?"
+                    onSend={async (t) => {
+                      const ok = await onInstruct(t, f, `ask-${f.key}`);
+                      if (ok) setAsking(null);
+                      return ok;
+                    }}
+                  />
+                )}
               </li>
             ))}
           </ul>
@@ -127,12 +242,14 @@ export default function WritingEditor({
   written,
   qc,
   dismissed: initialDismissed,
+  featured,
 }: {
   id: string;
   initial: Doc;
   written: boolean;
   qc: HumanizerResult | null;
   dismissed: string[];
+  featured: string | null;
 }) {
   const router = useRouter();
   const { doc, update, status, flush } = useAutosave(id, initial);
@@ -162,6 +279,36 @@ export default function WritingEditor({
       setBusy('');
       if ('error' in r && r.error) return setError(r.error);
       setNote(r.note || 'Fixed.');
+      router.refresh();
+    });
+
+  const instruct = (text: string, f: OpenFlag | undefined, tag: string) =>
+    new Promise<boolean>((resolve) =>
+      start(async () => {
+        setBusy(tag);
+        setError('');
+        setNote('');
+        await flush();
+        const r = await aiInstruct(id, text, f && { check: f.check, quote: f.quote, issue: f.issue, fix: f.fix });
+        setBusy('');
+        if ('error' in r && r.error) {
+          setError(r.error);
+          return resolve(false);
+        }
+        setNote(('note' in r && r.note) || 'Done.');
+        router.refresh();
+        resolve(true);
+      }),
+    );
+
+  const toQuote = (f: OpenFlag) =>
+    start(async () => {
+      setBusy(`pq-${f.key}`);
+      setError('');
+      await flush();
+      const r = await makePullQuote(id, { check: f.check, quote: f.quote, issue: f.issue });
+      setBusy('');
+      if ('error' in r && r.error) return setError(r.error);
       router.refresh();
     });
 
@@ -222,7 +369,7 @@ export default function WritingEditor({
       {error && <p className="notice error no-print">{error}</p>}
       {note && <p className="notice no-print">{note}</p>}
       {showNotes && qc && (
-        <Notes flags={flags} busy={busy} pending={pending} onFix={fixWithAi} onLeave={leave} onClose={() => setShowNotes(false)} />
+        <Notes flags={flags} busy={busy} pending={pending} onFix={fixWithAi} onLeave={leave} onClose={() => setShowNotes(false)} onInstruct={instruct} onQuote={toQuote} />
       )}
       {!written && (
         <div className="notice no-print">
@@ -233,6 +380,7 @@ export default function WritingEditor({
         </div>
       )}
 
+      <Featured id={id} initial={featured} />
       <AutoText className={fieldClass('w-title', doc.title.text)} value={doc.title.text} placeholder="Title" onChange={(v) => update((d) => { d.title.text = v; })} />
       <Hints b={{ ...doc.title, text: '' }} />
 
