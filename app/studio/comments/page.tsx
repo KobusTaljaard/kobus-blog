@@ -28,7 +28,8 @@ export default async function CommentsPage() {
   );
 
   return (
-    <div className="wrap">
+    <div className="list-page">
+      <h1 className="page-title">Comments</h1>
       <h2 className="section-title">Waiting for you ({pending.length})</h2>
       {pending.length === 0 ? <p className="muted">Nothing waiting.</p> : pending.map(row)}
       <h2 className="section-title">On the blog</h2>

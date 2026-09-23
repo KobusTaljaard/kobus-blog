@@ -14,14 +14,17 @@ export type Post = {
   theme: string | null;
   notes: string | null;
   outline: string;
+  doc: any;
   title: string;
   slug: string | null;
   body_html: string;
+  published_html: string | null;
+  published_title: string | null;
   excerpt: string;
   tags: string[];
   author: string;
   featured_image_id: string | null;
-  qc: QcResult | null;
+  qc: HumanizerResult | null;
   qc_hash: string | null;
   qc_at: string | null;
   published_at: string | null;
@@ -31,16 +34,5 @@ export type Post = {
   source_date?: string | null;
 };
 
-export type QcFlag = { quote: string; note: string; fix?: string };
-
-export type QcResult = {
-  ai_score: number;
-  quality_score: number;
-  ai_flags: QcFlag[];
-  error_flags: QcFlag[];
-  summary: string;
-  passed: boolean;
-  model: string;
-};
-
-export const QC_PASS_MARK = 85;
+export { CHECK_MIN, OVERALL_MIN, type Flag, type Check, type HumanizerResult } from './rules';
+import type { HumanizerResult } from './rules';

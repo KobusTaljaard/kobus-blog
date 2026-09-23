@@ -1,38 +1,32 @@
+import Link from 'next/link';
 import { sql } from '@/lib/db';
 import { formatDate } from '@/lib/html';
 import UploadForm from './UploadForm';
-import SourceRowActions from './SourceRowActions';
 
 export const maxDuration = 300;
 
 export default async function SourcesPage() {
   const sources = await sql`
     select s.id, s.filename, s.created_at, s.analysis ? 'error' as failed,
-           (select count(*)::int from app.posts p where p.source_id = s.id) as posts
+           (select count(*)::int from app.posts p where p.source_id = s.id) as pieces
     from app.sources s order by s.created_at desc`;
-
   return (
-    <div className="wrap">
-      <h2 className="section-title">Upload</h2>
+    <div className="list-page">
+      <h1 className="page-title">Original Sources</h1>
       <UploadForm />
       {sources.length > 0 && (
-        <>
-          <h2 className="section-title">Sources</h2>
-          <ul className="rows">
-            {sources.map((s) => (
-              <li key={s.id}>
-                <span>
-                  {s.filename}
-                  <span className="muted small"> · {formatDate(s.created_at)}</span>
+        <ul className="piece-list" style={{ marginTop: 40 }}>
+          {sources.map((s) => (
+            <li key={s.id}>
+              <Link href={`/studio/sources/${s.id}`}>
+                <span className="piece-title">{s.filename}</span>
+                <span className="piece-meta">
+                  {formatDate(s.created_at)} · {s.failed ? 'analysis failed' : `${s.pieces} ${s.pieces === 1 ? 'piece' : 'pieces'}`}
                 </span>
-                <span className="muted small" style={{ whiteSpace: 'nowrap' }}>
-                  {s.failed ? 'analysis failed' : `${s.posts} ${s.posts === 1 ? 'post' : 'posts'}`}{' '}
-                  <SourceRowActions id={s.id} failed={!!s.failed} canDelete={s.posts === 0} />
-                </span>
-              </li>
-            ))}
-          </ul>
-        </>
+              </Link>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );

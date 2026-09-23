@@ -6,7 +6,7 @@ import { createHash } from 'crypto';
 /** The only formatting the blog allows: headings, paragraphs, bold, italic, images, and links. */
 export function cleanHtml(html: string): string {
   return sanitize(html, {
-    allowedTags: ['p', 'h2', 'h3', 'strong', 'em', 'b', 'i', 'img', 'br', 'blockquote', 'a'],
+    allowedTags: ['p', 'h2', 'h3', 'h4', 'strong', 'em', 'b', 'i', 'img', 'br', 'blockquote', 'a'],
     allowedAttributes: { img: ['src', 'alt'], a: ['href'] },
     allowedSchemes: ['https', 'http', 'mailto'],
     allowedSchemesByTag: { img: [] },
