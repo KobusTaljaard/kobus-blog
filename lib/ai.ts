@@ -64,6 +64,13 @@ const WRITER_CONTEXT = `The writer is Kobus Taljaard: a South African real estat
 
 How he structures a piece: a title; an intro; usually two to five points; under any point, optional "forks" (2–6 one-line ideas that open the point up); an "outro" that turns from the teaching toward the landing; and a conclusion where he draws everything together, "lands the plane" and makes one final application. He makes applications wherever the teaching allows — in the title, intro, any point or fork — not only at the end.`;
 
+/** What the app has learned about him so far (rebuilt weekly from his sources, edits and published posts). */
+function learned(profile?: string) {
+  return profile?.trim()
+    ? `\n\n<what_you_have_learned_about_kobus>\nThis is a living profile built from everything he has written and every change he made to AI drafts. Treat it as the best available guide to his voice, beliefs and ways. Where it and your own instinct differ, follow it.\n\n${profile.trim()}\n</what_you_have_learned_about_kobus>`
+    : '';
+}
+
 const APPS = { type: 'array', items: { type: 'string' }, description: 'Applications he makes at this spot, one short line each. Empty if none.' };
 const LINE = (d: string) => ({ type: 'object', properties: { text: { type: 'string', description: d }, apps: APPS }, required: ['text', 'apps'] });
 
@@ -72,9 +79,9 @@ const LINE = (d: string) => ({ type: 'object', properties: { text: { type: 'stri
 export type FoundTheme = { name: string; summary: string; quotes: string[]; main: boolean };
 export type ThemeFind = { themes: FoundTheme[]; notes: string };
 
-export async function findThemes(transcript: string): Promise<ThemeFind> {
+export async function findThemes(transcript: string, profile?: string): Promise<ThemeFind> {
   return callTool<ThemeFind>({
-    system: `${WRITER_CONTEXT}
+    system: `${WRITER_CONTEXT}${learned(profile)}
 
 You are his editor. You read one notebook entry and name the themes in it, so he can choose which become blog posts. You never add ideas of your own.`,
     user: `<transcript>
@@ -133,6 +140,7 @@ export async function outlineTheme(input: {
   absorbed: { name: string; summary: string }[];
   others: { name: string; summary: string }[];
   notes: string;
+  profile?: string;
 }): Promise<OutlineOut> {
   const absorbed = input.absorbed.length
     ? `\n\nHe merged these themes into it. Fold them in as points or, more often, as forks under the point they serve:\n${input.absorbed.map((t) => `- ${t.name}: ${t.summary}`).join('\n')}`
@@ -141,7 +149,7 @@ export async function outlineTheme(input: {
     ? `\n\nLeave out material that belongs to these other themes (they are separate pieces or were dropped):\n${input.others.map((t) => `- ${t.name}: ${t.summary}`).join('\n')}`
     : '';
   return callTool<OutlineOut>({
-    system: `${WRITER_CONTEXT}
+    system: `${WRITER_CONTEXT}${learned(input.profile)}
 
 You are his editor. You outline one theme from his notebook entry in his structure. You never add ideas of your own.`,
     user: `<transcript>
@@ -198,54 +206,90 @@ export const AI_TELLS = `- Stock AI vocabulary: delve, tapestry, testament, jour
 - Hedging and throat-clearing ("I think it's important to…", "Let's explore…").
 - Generic, sourceless claims and vague universal statements he did not make.`;
 
-export type Written = { blocks: { id: string; body_markdown: string }[]; excerpt: string; tags: string[] };
+export type Written = {
+  title: string;
+  blocks: { id: string; heading?: string; body_markdown: string }[];
+  excerpt: string;
+  tags: string[];
+};
 
-export async function writeFromOutline(input: { transcript: string; outline: string; notes: string }): Promise<Written> {
-  return callTool<Written>({
-    system: `${WRITER_CONTEXT}
+/** The craft rules for every piece of prose the app writes for him. Hardwired: the outline is a cue, never the text. */
+export const WRITING_CRAFT = `THE OUTLINE IS NEVER THE ARTICLE.
+An outline line is a cue: a note that reminds a writer what this part is about. It is not a sentence to keep, expand slightly, or paraphrase. Copying or lightly rewording outline lines into prose is lazy, machine writing and is forbidden. A reader of the finished post must never be able to reconstruct the outline by reading the first sentence of each section.
 
-You turn his approved outline into the finished post, block by block, in his voice. The post must read as if he wrote it by hand, because he did: your job is arrangement and cleanup, not authorship.
-
-Rules:
-- Use his words, phrasing, images and examples from the transcript wherever possible. Keep his idioms, directness and South African English.
-- Write prose for every block id in the outline, in its place. Headings (title, point and fork names) are his; do not rewrite them and do not repeat them in the prose.
-- Weave each listed application into the prose of its block, in his words.
-- Stay within this outline. Do not add ideas, stories, facts, scripture references or conclusions he did not state. If a block's idea is empty, return an empty body for it.
-- Fix the listed issues. Keep his dominant spelling variant.
-- Short paragraphs of varied length. Bold or italic only where he would stress a word when speaking. No lists unless he dictated one. No headings inside a body.
+You write like the best essayist and copywriter alive, writing as Kobus:
+- Go back to the original source (his notebook transcript) for every section. Mine it for BOTH ideas and words: his arguments, reasons, stories, examples, images, turns of phrase, questions, scripture he cites. The outline tells you which part of the source a section draws on; the source gives you the substance.
+- Develop each idea the way a writer does: open with something concrete (a picture, a moment, a sharp claim, a question he would ask), unpack it, reason it through, show why it matters, and move the reader on. Earn each point before stating it.
+- Build an argument across the piece. Each section should hand off to the next; the reader should feel pulled forward. Transitions come from the thought itself, not from connector words.
+- Use his words where they are strong. Where his spoken phrasing is loose, write what he meant the way he would write it at his best, keeping his vocabulary, directness, humour and South African English.
+- Vary sentence and paragraph length with purpose. Short lines for weight. Longer ones to carry a thought.
+- Applications are part of the teaching, not bolt-ons: land each one where the outline places it, concretely, addressed to the reader's real life.
+- Stay true to him. You may develop, illustrate and connect his ideas, but do not invent facts about his life, stories that did not happen, numbers, quotes, or theology he did not hold. General, obviously illustrative examples are fine; say them as illustrations.
+- No lists unless he dictated one. Bold or italic only where he would lean on a word when speaking.
 - Avoid every one of these AI-writing tells:
-${AI_TELLS}
-- The conclusion lands the plane: it draws the piece together and makes the final application, in his words. End where his thought ends.`,
-    user: `<transcript>
-${input.transcript}
-</transcript>
+${AI_TELLS}`;
 
-<approved_outline>
+export async function writeFromOutline(input: {
+  transcript: string;
+  outline: string;
+  notes: string;
+  profile?: string;
+  examples?: { title: string; markdown: string }[];
+}): Promise<Written> {
+  const examples = input.examples?.length
+    ? `\n\n<his_published_posts_for_style>\nMatch the voice, rhythm and depth of these posts he approved and published. Do not reuse their content.\n${input.examples.map((e) => `<post title="${e.title.replace(/"/g, "'")}">\n${e.markdown}\n</post>`).join('\n')}\n</his_published_posts_for_style>`
+    : '';
+  return callTool<Written>({
+    system: `${WRITER_CONTEXT}${learned(input.profile)}
+
+You write his blog post from his outline and his original notebook entry.
+
+${WRITING_CRAFT}
+
+Structure:
+- Write prose for every block id in the outline, in its place, in reading order: intro, each point (and its forks), outro, conclusion.
+- Headings: for each point and fork, return a heading a good editor would print: short, specific, alive, in his voice. It may keep his wording if it already works as a heading. Never put the heading's words at the start of the prose beneath it.
+- title: a strong, clear title in his voice that a reader would click and a search engine would understand. Keep his working title if it is already good.
+- The intro earns the reader's attention and sets up the question the piece answers. It does not summarise the points.
+- The outro turns from the teaching toward the landing.
+- The conclusion lands the plane: it draws everything together and makes one final application. End where his thought ends; no tidy moral tacked on.
+- If a block's cue is empty and the source has nothing for it, return an empty body.
+- Fix the listed issues. Keep his dominant spelling variant (South African / British).`,
+    user: `<original_source>
+${input.transcript}
+</original_source>
+
+<outline_cues>
 ${input.outline}
-</approved_outline>
+</outline_cues>${examples}
 
 <issues_to_fix>
 ${input.notes || 'None noted.'}
 </issues_to_fix>
 
-Return the prose for each block id, a one- or two-sentence excerpt in his voice (for the blog's list page) and 1–4 short lowercase tags.`,
+Write the full post. Return the title, a heading and prose for each block id, a one- or two-sentence excerpt in his voice (for the blog's list page), and 1–4 short lowercase tags.`,
     toolName: 'save_writing',
-    toolDescription: 'Save the prose for every block.',
+    toolDescription: 'Save the finished post, block by block.',
     schema: {
       type: 'object',
       properties: {
+        title: { type: 'string' },
         blocks: {
           type: 'array',
           items: {
             type: 'object',
-            properties: { id: { type: 'string' }, body_markdown: { type: 'string', description: 'Markdown paragraphs; no headings.' } },
+            properties: {
+              id: { type: 'string' },
+              heading: { type: 'string', description: 'Printed heading for point and fork blocks; empty for intro, outro and conclusion.' },
+              body_markdown: { type: 'string', description: 'Markdown paragraphs; no headings.' },
+            },
             required: ['id', 'body_markdown'],
           },
         },
         excerpt: { type: 'string' },
         tags: { type: 'array', items: { type: 'string' }, maxItems: 4 },
       },
-      required: ['blocks', 'excerpt', 'tags'],
+      required: ['title', 'blocks', 'excerpt', 'tags'],
     },
     maxTokens: 32000,
   });
@@ -266,9 +310,9 @@ export type HumanizerOut = {
   summary: string;
 };
 
-export async function humanize(title: string, articleMarkdown: string, transcript: string): Promise<HumanizerOut> {
+export async function humanize(title: string, articleMarkdown: string, transcript: string, profile?: string): Promise<HumanizerOut> {
   return callTool<HumanizerOut>({
-    system: `${WRITER_CONTEXT}
+    system: `${WRITER_CONTEXT}${learned(profile)}
 
 You are the Humanizer: the last, strict and fair reader before a post goes public. You do not rewrite the piece; you point at exact passages and offer a fix in his voice.
 
@@ -278,7 +322,7 @@ ${CHECKS.map((c) => `- ${c.key} (${c.name}): ${c.what}`).join('\n')}
 AI-writing tells:
 ${AI_TELLS}
 
-Plain, simple or unpolished writing reads as human; do not deduct for it. For every deduction add a flag: the exact passage copied verbatim from the post (short, so it can be found), the problem in plain words, and a fix: replacement text for exactly that passage, in his voice. Do not flag matters of taste. Scores must match the flags: a clean check scores in the 90s.`,
+Plain, simple or unpolished writing reads as human; do not deduct for it. For every deduction add a flag: the exact passage copied verbatim from the post (short, so it can be found), the problem in plain words, and a fix: replacement text for exactly that passage, in his voice. Do not flag matters of taste, and do not flag anything the learned profile says he deliberately does. Flag an outline line copied as prose as an argument and AI issue. Scores must match the flags: a clean check scores in the 90s.`,
     user: `<his_own_words_for_voice_reference>
 ${transcript}
 </his_own_words_for_voice_reference>
@@ -318,6 +362,115 @@ Run all five checks. The overall summary is two plain sentences to Kobus: what i
         summary: { type: 'string' },
       },
       required: ['checks', 'summary'],
+    },
+    maxTokens: 16000,
+  });
+}
+
+// ---------- Fixing flagged issues ----------
+
+export type Unit = { id: string; kind: 'title' | 'heading' | 'body'; label: string; text: string };
+export type Edit = { unit: string; find: string; replace: string };
+export type FixOut = { edits: Edit[]; note: string };
+
+/** Fixes only the named issues with the smallest edits that do the job. */
+export async function fixIssues(input: {
+  title: string;
+  units: Unit[];
+  issues: { check: string; quote: string; issue: string; fix?: string }[];
+  transcript: string;
+  profile?: string;
+}): Promise<FixOut> {
+  return callTool<FixOut>({
+    system: `${WRITER_CONTEXT}${learned(input.profile)}
+
+You are his editor fixing specific problems a reviewer flagged in his post. Fix ONLY the listed issues. Leave every other word alone.
+
+${WRITING_CRAFT}
+
+How to edit:
+- The post is given as units (title, headings, body blocks in Markdown), each with an id.
+- Return edits. Each edit names a unit id, a "find" string copied EXACTLY, character for character, from that unit's text (long enough to be unique there, short enough to be precise), and the "replace" text.
+- For a heading or the title, "find" is the whole heading or title.
+- An issue about a whole section (flow, argument, a copied outline line) may need a rewritten paragraph: then "find" is that whole paragraph.
+- Keep his voice. Keep Markdown bold/italic and image lines intact. Do not add headings inside body units.
+- If an issue cannot be fixed without his input (a fact only he knows), make no edit for it and say so in note.`,
+    user: `<his_own_words_for_reference>
+${input.transcript.slice(0, 60000)}
+</his_own_words_for_reference>
+
+<post_units>
+${input.units.map((u) => `<unit id="${u.id}" kind="${u.kind}" label="${u.label}">\n${u.text}\n</unit>`).join('\n')}
+</post_units>
+
+<issues_to_fix>
+${input.issues.map((f, i) => `${i + 1}. [${f.check}] at "${f.quote}": ${f.issue}${f.fix ? ` (reviewer's suggestion: ${f.fix})` : ''}`).join('\n')}
+</issues_to_fix>
+
+Return the edits and a one-sentence note to Kobus on what you changed (or could not).`,
+    toolName: 'save_edits',
+    toolDescription: 'Save the edits that fix the issues.',
+    schema: {
+      type: 'object',
+      properties: {
+        edits: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { unit: { type: 'string' }, find: { type: 'string' }, replace: { type: 'string' } },
+            required: ['unit', 'find', 'replace'],
+          },
+        },
+        note: { type: 'string' },
+      },
+      required: ['edits', 'note'],
+    },
+    maxTokens: 16000,
+  });
+}
+
+// ---------- Learning: the weekly self-improvement pass ----------
+
+export type LearnOut = { profile: string; changes: string };
+
+export const PROFILE_SECTIONS = `## Voice and style
+## Words and phrases he uses (and ones he never would)
+## How he builds a piece (openings, argument, applications, landings)
+## Theology and how he teaches the Bible
+## Business, real estate and money
+## Family, relationships and how he speaks to people
+## Life story and recurring examples (facts he has stated about himself)
+## What he changes in AI drafts (editing lessons)
+## Humanizer calibration (what not to flag; what matters most to him)`;
+
+export async function learnVoice(input: { profile: string; evidence: string }): Promise<LearnOut> {
+  return callTool<LearnOut>({
+    system: `${WRITER_CONTEXT}
+
+You maintain the living profile the writing app uses to write, outline, check and fix Kobus's work. Every week you read new evidence and improve the profile, so the app becomes more like him over time.
+
+Method:
+- Evidence ranks: his own words (sources) > changes he made to AI output (strongest signal of what the AI gets wrong) > published posts > Humanizer results and dismissed flags (a dismissed flag means the reviewer was wrong for him).
+- Keep what is still true, sharpen what the new evidence refines, add what is new, and remove what the evidence contradicts.
+- Every line must be specific and useful to a writer: concrete habits, actual phrases, beliefs as he states them, examples he returns to. No flattery, no generic writing advice, no guesses about his inner life.
+- Record only what the evidence shows. Mark anything seen only once as "(seen once)".
+- Keep it under about 2,500 words, in these sections:
+${PROFILE_SECTIONS}`,
+    user: `<current_profile>
+${input.profile || '(empty: this is the first pass; build it from the evidence)'}
+</current_profile>
+
+<new_evidence>
+${input.evidence}
+</new_evidence>
+
+Return the complete updated profile (Markdown) and a short list of what changed this week.`,
+    toolName: 'save_profile',
+    toolDescription: 'Save the updated profile.',
+    schema: {
+      type: 'object',
+      properties: { profile: { type: 'string' }, changes: { type: 'string' } },
+      required: ['profile', 'changes'],
     },
     maxTokens: 16000,
   });

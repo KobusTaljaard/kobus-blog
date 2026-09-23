@@ -26,6 +26,7 @@ export default async function HumanizerPage({ params }: { params: Promise<{ id: 
         featured: post.featured_image_id,
         qc: post.qc,
         qcHash: post.qc_hash,
+        dismissed: post.qc_dismissed || [],
       }}
     />
   );

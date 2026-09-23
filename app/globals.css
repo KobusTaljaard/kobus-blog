@@ -317,3 +317,47 @@ form.note { display: grid; gap: 10px; }
   .hum { display: block; }
   .hum-panel { display: none; }
 }
+
+/* ---------- Fixing flagged issues ---------- */
+.fix-all { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 10px 0 14px; }
+.flag-actions { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 4px; }
+.add.strong { opacity: 1; color: var(--navy); font-style: normal; font-weight: 600; }
+.add:disabled { cursor: default; opacity: 0.35; }
+
+/* Humanizer underlines inside Writing */
+.flagged { background: linear-gradient(transparent 62%, #f4e2a6 62%); text-decoration: underline wavy #b8862b; text-decoration-thickness: 1px; text-underline-offset: 4px; cursor: help; }
+textarea.flagged-field { text-decoration: underline wavy #b8862b; text-decoration-thickness: 1px; text-underline-offset: 6px; }
+.flash { outline: 2px solid #b8862b; outline-offset: 3px; transition: outline-color 1.2s; }
+.hint-cue { display: flex; gap: 8px; align-items: baseline; color: var(--ink-soft); }
+.quiet-btn.has-notes { border-color: #b8862b; color: #8a5f12; }
+
+.sheet.writing.with-notes { padding-right: min(26rem, 34vw); }
+.w-notes { position: fixed; top: 128px; right: 16px; bottom: 16px; width: min(24rem, 32vw); overflow-y: auto; background: var(--paper); border: 1px solid var(--rule); border-radius: 4px; padding: 14px 16px; z-index: 20; box-shadow: 0 6px 24px rgba(42, 39, 36, 0.08); }
+.w-notes-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+.w-notes ul { list-style: none; margin: 12px 0 0; padding: 0; }
+.w-notes li { display: flex; flex-direction: column; gap: 3px; padding: 10px 0; border-top: 1px solid var(--rule); line-height: 1.45; }
+.note-check { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-soft); }
+.note-quote { appearance: none; background: none; border: 0; padding: 0; text-align: left; font: inherit; font-size: 0.9rem; color: var(--ink); cursor: pointer; text-decoration: underline wavy #b8862b; text-decoration-thickness: 1px; text-underline-offset: 4px; }
+.small-btn { min-height: 32px; font-size: 0.85rem; }
+@media (max-width: 900px) {
+  .sheet.writing.with-notes { padding-right: 0; }
+  .w-notes { position: static; width: auto; max-height: none; margin: 0 0 16px; box-shadow: none; }
+}
+
+/* ---------- Voice ---------- */
+.voice-intro { max-width: 60rem; margin: 6px 0 14px; }
+.voice-text { display: block; width: 100%; min-height: calc(100vh - 280px); padding: 18px 20px; border: 1px solid var(--rule); border-radius: 3px; background: rgba(255, 255, 255, 0.35); font: inherit; font-size: 0.95rem; line-height: 1.65; color: var(--ink); resize: vertical; }
+.voice-text:focus { outline: none; border-color: var(--navy); }
+.voice-history { margin: 18px 0 40px; }
+.voice-history summary { cursor: pointer; color: var(--ink-soft); }
+.voice-history ul { list-style: none; padding: 0; }
+.voice-history li { padding: 8px 0; border-top: 1px solid var(--rule); }
+.voice-history p { margin: 4px 0 0; white-space: pre-wrap; }
+
+/* ---------- Share ---------- */
+.share { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin: 2.4rem 0 0; padding-top: 1.2rem; border-top: 1px solid var(--rule); font-size: 0.85rem; }
+.share-label { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-soft); }
+.share a, .share button { appearance: none; background: none; border: 0; padding: 4px 0; font: inherit; color: var(--ink-soft); text-decoration: none; cursor: pointer; }
+.share a:hover, .share button:hover, .share a:focus-visible, .share button:focus-visible { color: var(--ink); text-decoration: underline; }
+@media print { .share, .w-notes { display: none; } }
+.o-cue { display: block; font-style: italic; margin: -2px 0 4px; }

@@ -46,6 +46,7 @@ export default function OutlineEditor({ id, initial, source, written }: { id: st
       <section className="o-block">
         <span className="o-label">Working title</span>
         <AutoText className="o-title" value={doc.title.text} placeholder="Working title" onChange={(v) => update((d) => { d.title.text = v; })} />
+        {doc.title.cue && doc.title.cue.trim() !== doc.title.text.trim() && <span className="o-cue small muted">working title: {doc.title.cue}</span>}
         <Apps apps={doc.title.apps} onChange={(a) => update((d) => { d.title.apps = a; })} />
         <AddApp onAdd={() => update((d) => { d.title.apps.push(''); })} />
       </section>
@@ -65,6 +66,7 @@ export default function OutlineEditor({ id, initial, source, written }: { id: st
               <span className="o-num">{i + 1}</span>
               <div className="grow">
                 <AutoText className="o-point-text" value={p.text} placeholder="Point" onChange={(v) => update((d) => { d.points[i].text = v; })} />
+                {p.cue && p.cue.trim() !== p.text.trim() && <span className="o-cue small muted">your cue: {p.cue}</span>}
                 <Apps apps={p.apps} onChange={(a) => update((d) => { d.points[i].apps = a; })} />
                 <div className="row-tools no-print">
                   <AddApp onAdd={() => update((d) => { d.points[i].apps.push(''); })} />

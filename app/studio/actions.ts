@@ -4,9 +4,11 @@ import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/lib/auth/server';
 import { sql, CHECK_MIN, OVERALL_MIN, type Post, type HumanizerResult } from '@/lib/db';
-import { findThemes, outlineTheme, writeFromOutline, humanize, CHECKS, MODEL } from '@/lib/ai';
+import { findThemes, outlineTheme, writeFromOutline, humanize, fixIssues, CHECKS, MODEL, type Unit } from '@/lib/ai';
+import { getProfile, logIteration, styleExamples, runLearning } from '@/lib/learn';
+import { norm, quoteText } from '@/lib/rules';
 import { cleanHtml, contentHash, htmlToMarkdown, markdownToHtml, slugify } from '@/lib/html';
-import { compileHtml, docOf, normaliseDoc, type Doc } from '@/lib/doc';
+import { compileHtml, docOf, normaliseDoc, outlineText, draftText, type Doc } from '@/lib/doc';
 
 function refreshPublic(slug?: string | null) {
   revalidatePath('/writing');
@@ -24,7 +26,7 @@ async function getPost(id: string): Promise<Post> {
 
 async function discoverThemes(sourceId: string, content: string) {
   try {
-    const found = await findThemes(content);
+    const found = await findThemes(content, await getProfile());
     await sql`update app.sources set analysis = ${JSON.stringify({ notes: found.notes })}::jsonb where id = ${sourceId}`;
     await sql`delete from app.themes where source_id = ${sourceId} and status in ('proposed', 'removed', 'merged')
               and post_id is null`;
@@ -114,6 +116,7 @@ export async function makeOutlines(ids: string[]) {
   const [src] = await sql`select content, analysis from app.sources where id = ${sourceId}`;
   const all = await sql`select id, name, summary, status, members from app.themes where source_id = ${sourceId}`;
   const byId = new Map(all.map((t) => [t.id, t]));
+  const profile = await getProfile();
 
   const results = await Promise.allSettled(
     chosen.map(async (t) => {
@@ -127,12 +130,14 @@ export async function makeOutlines(ids: string[]) {
         absorbed: absorbedIds.map((i) => byId.get(i)).filter(Boolean).map((a: any) => ({ name: a.name, summary: a.summary })),
         others: others.map((o) => ({ name: o.name, summary: o.summary })),
         notes: src.analysis?.notes || '',
+        profile,
       });
       const doc = normaliseDoc(outline, t.name);
       const [post] = await sql`insert into app.posts (source_id, theme, title, doc, notes, status)
         values (${sourceId}, ${t.name}, ${doc.title.text}, ${JSON.stringify(doc)}::jsonb, ${src.analysis?.notes || ''}, 'outline')
         returning id`;
       await sql`update app.themes set status = 'outlined', post_id = ${post.id} where id = ${t.id}`;
+      await logIteration('ai_outline', { postId: post.id, sourceId, content: outlineText(doc) });
       return post.id as string;
     }),
   );
@@ -179,37 +184,52 @@ export async function writeIt(id: string) {
   const post = await getPost(id);
   const doc = docOf(post);
   const [src] = post.source_id ? await sql`select content from app.sources where id = ${post.source_id}` : [];
-  const outlineText = JSON.stringify(
+  // Keep the outline cue for every block before the writer gives it a printed heading.
+  const cueOf = (b: { text: string; cue?: string }) => b.cue || b.text;
+  const cues = JSON.stringify(
     {
-      title: doc.title.text,
+      working_title: doc.title.text,
+      title_applications: doc.title.apps,
       blocks: [
-        { id: doc.intro.id, role: 'intro', idea: doc.intro.text, apps: doc.intro.apps },
+        { id: doc.intro.id, role: 'intro', cue: doc.intro.text, applications: doc.intro.apps },
         ...doc.points.flatMap((p, i) => [
-          { id: p.id, role: `point ${i + 1}`, heading: p.text, apps: p.apps },
-          ...p.forks.map((f, j) => ({ id: f.id, role: `point ${i + 1} fork ${j + 1}`, heading: f.text, apps: f.apps })),
+          { id: p.id, role: `point ${i + 1}`, cue: cueOf(p), applications: p.apps },
+          ...p.forks.map((f, j) => ({ id: f.id, role: `point ${i + 1}, fork ${j + 1}`, cue: cueOf(f), applications: f.apps })),
         ]),
-        { id: doc.outro.id, role: 'outro', idea: doc.outro.text, apps: doc.outro.apps },
-        { id: doc.conclusion.id, role: 'conclusion', idea: doc.conclusion.text, apps: doc.conclusion.apps },
+        { id: doc.outro.id, role: 'outro', cue: doc.outro.text, applications: doc.outro.apps },
+        { id: doc.conclusion.id, role: 'conclusion', cue: doc.conclusion.text, applications: doc.conclusion.apps },
       ],
-      title_apps: doc.title.apps,
     },
     null,
     1,
   );
+  await logIteration('outline_final', { postId: id, sourceId: post.source_id, content: outlineText(doc) });
+  const before = draftText(doc);
+  if (before.trim()) await logIteration('before_rewrite', { postId: id, sourceId: post.source_id, content: before });
   try {
-    const w = await writeFromOutline({ transcript: src?.content || '', outline: outlineText, notes: post.notes || '' });
-    const byId = new Map(w.blocks.map((b) => [b.id, b.body_markdown || '']));
-    const fill = (b: { id: string; body: string }) => {
-      const md = byId.get(b.id);
-      if (md !== undefined) b.body = markdownToHtml(md);
+    const [profile, examples] = await Promise.all([getProfile(), styleExamples(2)]);
+    const w = await writeFromOutline({ transcript: src?.content || '', outline: cues, notes: post.notes || '', profile, examples });
+    const byId = new Map(w.blocks.map((b) => [b.id, b]));
+    const fill = (b: { id: string; body: string; text: string; cue?: string }, headed: boolean) => {
+      const got = byId.get(b.id);
+      if (!got) return;
+      b.body = markdownToHtml(got.body_markdown || '');
+      if (headed && got.heading?.trim() && got.heading.trim() !== b.text.trim()) {
+        b.cue = cueOf(b);
+        b.text = got.heading.trim();
+      }
     };
-    fill(doc.intro);
+    fill(doc.intro, false);
     doc.points.forEach((p) => {
-      fill(p);
-      p.forks.forEach(fill);
+      fill(p, true);
+      p.forks.forEach((f) => fill(f, !!f.text.trim()));
     });
-    fill(doc.outro);
-    fill(doc.conclusion);
+    fill(doc.outro, false);
+    fill(doc.conclusion, false);
+    if (w.title?.trim()) {
+      if (w.title.trim() !== doc.title.text.trim()) doc.title.cue = cueOf(doc.title);
+      doc.title.text = w.title.trim();
+    }
     const body = compileHtml(doc);
     const tags = (w.tags || []).map((t) => t.trim().toLowerCase()).filter(Boolean).slice(0, 4);
     await sql`update app.posts set doc = ${JSON.stringify(doc)}::jsonb, body_html = ${body}, title = ${doc.title.text.trim()},
@@ -217,10 +237,12 @@ export async function writeIt(id: string) {
               excerpt = case when excerpt = '' then ${(w.excerpt || '').trim()} else excerpt end,
               tags = case when cardinality(tags) = 0 then ${tags} else tags end,
               updated_at = now() where id = ${id}`;
+    await logIteration('ai_draft', { postId: id, sourceId: post.source_id, content: draftText(doc) });
   } catch (e) {
     return { error: `The writing could not be done: ${e instanceof Error ? e.message : e}` };
   }
   revalidatePath(`/studio/writing/${id}`);
+  revalidatePath(`/studio/outlines/${id}`);
   return { ok: true };
 }
 
@@ -232,7 +254,7 @@ export async function runHumanizer(id: string) {
   if (!post.title.trim() || !post.body_html.trim()) return { error: 'Write the piece first.' };
   const [src] = post.source_id ? await sql`select content from app.sources where id = ${post.source_id}` : [];
   try {
-    const raw = await humanize(post.title, htmlToMarkdown(post.body_html), src?.content || '');
+    const raw = await humanize(post.title, htmlToMarkdown(post.body_html), src?.content || '', await getProfile());
     const checks = CHECKS.map((c) => {
       const r = raw.checks.find((x) => x.key === c.key);
       return {
@@ -254,7 +276,13 @@ export async function runHumanizer(id: string) {
       model: MODEL,
     };
     const hash = contentHash(post.title, post.body_html);
-    await sql`update app.posts set qc = ${JSON.stringify(result)}::jsonb, qc_hash = ${hash}, qc_at = now() where id = ${id}`;
+    await sql`update app.posts set qc = ${JSON.stringify(result)}::jsonb, qc_hash = ${hash}, qc_at = now(), qc_dismissed = '{}' where id = ${id}`;
+    await logIteration('checked_text', { postId: id, sourceId: post.source_id, content: `# ${post.title}\n\n${htmlToMarkdown(post.body_html)}` });
+    await logIteration('humanizer', {
+      postId: id,
+      sourceId: post.source_id,
+      meta: { overall, checks: checks.map((c) => ({ check: c.name, score: c.score, flags: c.flags.map((f) => f.issue) })) },
+    });
     return { ok: true, result, hash };
   } catch (e) {
     return { error: `The Humanizer could not run: ${e instanceof Error ? e.message : e}` };
@@ -292,6 +320,125 @@ export async function applyFix(id: string, quote: string, fix: string) {
   if (!done) return { error: 'That passage has changed since the check, so it could not be found. Edit it in Writing.' };
   const r = await saveDoc(id, doc);
   return { ok: true, hash: r.hash, doc };
+}
+
+// ---------- AI fixes and dismissals ----------
+
+type FlagIn = { check: string; quote: string; issue: string; fix?: string };
+
+/** The piece as editable units: title, headings and each body in Markdown. */
+function unitsOf(doc: Doc): Unit[] {
+  const units: Unit[] = [{ id: 'title', kind: 'title', label: 'Title', text: doc.title.text }];
+  const body = (id: string, label: string, html: string) => {
+    if (html.trim()) units.push({ id: `b:${id}`, kind: 'body', label, text: htmlToMarkdown(html) });
+  };
+  body(doc.intro.id, 'Intro', doc.intro.body);
+  doc.points.forEach((p, i) => {
+    if (p.text.trim()) units.push({ id: `h:${p.id}`, kind: 'heading', label: `Point ${i + 1} heading`, text: p.text });
+    body(p.id, `Point ${i + 1}`, p.body);
+    p.forks.forEach((f, j) => {
+      if (f.text.trim()) units.push({ id: `h:${f.id}`, kind: 'heading', label: `Point ${i + 1}, fork ${j + 1} heading`, text: f.text });
+      body(f.id, `Point ${i + 1}, fork ${j + 1}`, f.body);
+    });
+  });
+  body(doc.outro.id, 'Outro', doc.outro.body);
+  body(doc.conclusion.id, 'Conclusion', doc.conclusion.body);
+  return units;
+}
+
+/** Replaces `find` in `text`, tolerating curly quotes and dashes. Null if it isn't there. */
+function replaceIn(text: string, find: string, replace: string): string | null {
+  if (!find) return null;
+  let at = text.indexOf(find);
+  if (at < 0) at = norm(text).indexOf(norm(find));
+  if (at < 0) return null;
+  return text.slice(0, at) + replace + text.slice(at + find.length);
+}
+
+/** Lets the AI fix one flagged issue, or several at once, with the smallest edits that do it. */
+export async function aiFix(id: string, flags: FlagIn[]) {
+  await requireOwner();
+  if (!flags.length) return { error: 'Nothing to fix.' };
+  const post = await getPost(id);
+  const doc = docOf(post);
+  const [src] = post.source_id ? await sql`select content from app.sources where id = ${post.source_id}` : [];
+  let out;
+  try {
+    out = await fixIssues({ title: doc.title.text, units: unitsOf(doc), issues: flags, transcript: src?.content || '', profile: await getProfile() });
+  } catch (e) {
+    return { error: `The fix could not be made: ${e instanceof Error ? e.message : e}` };
+  }
+  const blocks = new Map<string, { text: string; body: string }>();
+  blocks.set(doc.intro.id, doc.intro);
+  blocks.set(doc.outro.id, doc.outro);
+  blocks.set(doc.conclusion.id, doc.conclusion);
+  doc.points.forEach((p) => {
+    blocks.set(p.id, p);
+    p.forks.forEach((f) => blocks.set(f.id, f));
+  });
+  const md = new Map<string, string>(); // body edits are made in Markdown, then turned back into HTML once
+  let applied = 0;
+  const missed: string[] = [];
+  for (const e of out.edits || []) {
+    if (e.unit === 'title') {
+      const r = replaceIn(doc.title.text, e.find, e.replace) ?? (e.find.trim() ? null : e.replace);
+      if (r === null) { missed.push(e.find); continue; }
+      doc.title.text = r.trim();
+      applied++;
+    } else if (e.unit.startsWith('h:')) {
+      const b = blocks.get(e.unit.slice(2));
+      const r = b ? replaceIn(b.text, e.find, e.replace) : null;
+      if (!b || r === null) { missed.push(e.find); continue; }
+      b.text = r.trim();
+      applied++;
+    } else if (e.unit.startsWith('b:')) {
+      const key = e.unit.slice(2);
+      const b = blocks.get(key);
+      if (!b) { missed.push(e.find); continue; }
+      const cur = md.get(key) ?? htmlToMarkdown(b.body);
+      const r = replaceIn(cur, e.find, e.replace);
+      if (r === null) { missed.push(e.find); continue; }
+      md.set(key, r);
+      applied++;
+    }
+  }
+  for (const [key, text] of md) blocks.get(key)!.body = markdownToHtml(text);
+  if (!applied) return { error: out.note || 'The AI could not find a safe edit for that. Fix it by hand in Writing.' };
+  const r = await saveDoc(id, doc);
+  await logIteration('ai_fix', { postId: id, sourceId: post.source_id, meta: { issues: flags, edits: out.edits, note: out.note } });
+  return { ok: true, applied, missed: missed.length, note: out.note, hash: r.hash };
+}
+
+/** "Leave it": the reviewer was wrong about this one. The weekly pass learns from it. */
+export async function dismissFlag(id: string, flag: FlagIn) {
+  await requireOwner();
+  await sql`update app.posts set qc_dismissed = array_append(qc_dismissed, ${flag.quote}) where id = ${id}`;
+  const [p] = await sql`select source_id from app.posts where id = ${id}`;
+  await logIteration('dismissed', { postId: id, sourceId: p?.source_id, meta: { check: flag.check, quote: quoteText(flag.quote), issue: flag.issue } });
+  return { ok: true };
+}
+
+// ---------- Voice: what the app has learned ----------
+
+export async function saveProfile(text: string) {
+  await requireOwner();
+  const clean = text.trim();
+  if (!clean) return { error: 'The profile is empty.' };
+  await sql`insert into app.voice (profile, changes, by) values (${clean}, 'Edited by Kobus', 'kobus')`;
+  await logIteration('profile_edit', { content: clean });
+  revalidatePath('/studio/voice');
+  return { ok: true };
+}
+
+export async function learnNow() {
+  await requireOwner();
+  try {
+    const r = await runLearning('manual');
+    revalidatePath('/studio/voice');
+    return r.skipped ? { error: 'Nothing new to learn from since the last pass.' } : { ok: true, changes: r.changes };
+  } catch (e) {
+    return { error: `Learning failed: ${e instanceof Error ? e.message : e}` };
+  }
 }
 
 export async function savePublishDetails(
@@ -341,6 +488,7 @@ export async function publish(id: string) {
   }
   await sql`update app.posts set status = 'published', slug = ${slug}, published_html = body_html, published_title = title,
             published_at = coalesce(published_at, now()), updated_at = now() where id = ${id}`;
+  await logIteration('published', { postId: id, sourceId: post.source_id, content: `# ${post.title}\n\n${htmlToMarkdown(post.body_html)}` });
   refreshPublic(slug);
   return { ok: true, slug };
 }

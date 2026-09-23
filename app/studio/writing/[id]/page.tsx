@@ -11,5 +11,5 @@ export default async function WritingPage({ params }: { params: Promise<{ id: st
   const [post] = await sql`select * from app.posts where id = ${id}`;
   if (!post) notFound();
   const doc = docOf(post);
-  return <WritingEditor key={`${id}-${post.updated_at}`} id={id} initial={doc} written={isWritten(doc)} />;
+  return <WritingEditor key={`${id}-${post.updated_at}`} id={id} initial={doc} written={isWritten(doc)} qc={post.qc} dismissed={post.qc_dismissed || []} />;
 }

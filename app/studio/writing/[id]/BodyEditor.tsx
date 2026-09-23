@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useEditor, EditorContent, type Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Image from '@tiptap/extension-image';
 import Placeholder from '@tiptap/extension-placeholder';
+import { FlagHighlight, flagKey, type FlagMark } from './flagHighlight';
 
 /** The prose under one heading. Reports itself when focused so the one formatting bar can act on it. */
 export default function BodyEditor({
@@ -12,12 +13,16 @@ export default function BodyEditor({
   onChange,
   onFocus,
   placeholder,
+  flags = [],
 }: {
+  flags?: FlagMark[];
   value: string;
   onChange: (html: string) => void;
   onFocus: (e: Editor) => void;
   placeholder: string;
 }) {
+  const flagsRef = useRef(flags);
+  flagsRef.current = flags;
   const editor = useEditor({
     immediatelyRender: false,
     extensions: [
@@ -36,6 +41,7 @@ export default function BodyEditor({
       }),
       Image.configure({ inline: false }),
       Placeholder.configure({ placeholder }),
+      FlagHighlight.configure({ get: () => flagsRef.current }),
     ],
     content: value,
     onUpdate: ({ editor }) => onChange(editor.isEmpty ? '' : editor.getHTML()),
@@ -48,6 +54,12 @@ export default function BodyEditor({
     const now = editor.isEmpty ? '' : editor.getHTML();
     if (now !== value) editor.commands.setContent(value || '', { emitUpdate: false });
   }, [editor, value]);
+
+  // Redraw the Humanizer underlines when the list of open flags changes.
+  const flagSig = flags.map((f) => f.key).join('|');
+  useEffect(() => {
+    if (editor && !editor.isDestroyed) editor.view.dispatch(editor.state.tr.setMeta(flagKey, true));
+  }, [editor, flagSig]);
 
   return <EditorContent editor={editor} className="body-editor prose" />;
 }

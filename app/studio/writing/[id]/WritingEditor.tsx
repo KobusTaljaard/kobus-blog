@@ -2,14 +2,15 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useState, useTransition } from 'react';
+import { useMemo, useState, useTransition } from 'react';
 import { useEditorState, type Editor } from '@tiptap/react';
-import { block, point, type Doc, type Block } from '@/lib/doc';
+import { block, compileHtml, point, type Doc, type Block } from '@/lib/doc';
+import { norm, openFlags, quoteText, type HumanizerResult, type OpenFlag } from '@/lib/rules';
 import AutoText from '../../_ui/AutoText';
 import { SaveStatus, useAutosave } from '../../_ui/useAutosave';
 import PrintButton from '../../_ui/PrintButton';
 import { pickAndUploadImage } from '../../_ui/images';
-import { writeIt } from '../../actions';
+import { aiFix, dismissFlag, writeIt } from '../../actions';
 import BodyEditor from './BodyEditor';
 
 function Toolbar({ editor, onImage, busy }: { editor: Editor | null; onImage: () => void; busy: boolean }) {
@@ -48,9 +49,11 @@ function Toolbar({ editor, onImage, busy }: { editor: Editor | null; onImage: ()
 }
 
 function Hints({ b }: { b: Block }) {
-  if (!b.text && !b.apps.length) return null;
+  const cue = b.cue && b.cue.trim() !== b.text.trim() ? b.cue : '';
+  if (!cue && !b.apps.length) return null;
   return (
     <div className="hints no-print">
+      {cue && <span className="hint-cue"><span className="app-tag">Outline</span>{cue}</span>}
       {b.apps.map((a, i) => (
         <span key={i} className="hint-app"><span className="app-tag">Apply</span>{a}</span>
       ))}
@@ -58,13 +61,119 @@ function Hints({ b }: { b: Block }) {
   );
 }
 
-export default function WritingEditor({ id, initial, written }: { id: string; initial: Doc; written: boolean }) {
+function Notes({
+  flags,
+  busy,
+  pending,
+  onFix,
+  onLeave,
+  onClose,
+}: {
+  flags: OpenFlag[];
+  busy: string;
+  pending: boolean;
+  onFix: (f: OpenFlag[], tag: string) => void;
+  onLeave: (f: OpenFlag) => void;
+  onClose: () => void;
+}) {
+  const show = (f: OpenFlag) => {
+    const el =
+      document.querySelector(`[data-flag="${CSS.escape(f.key)}"]`) ||
+      Array.from(document.querySelectorAll<HTMLTextAreaElement>('textarea.flag-field')).find((t) => norm(t.value).includes(norm(quoteText(f.quote))));
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.add('flash');
+    setTimeout(() => el.classList.remove('flash'), 1600);
+  };
+  return (
+    <aside className="w-notes no-print" aria-label="Humanizer notes">
+      <div className="w-notes-head">
+        <b>Humanizer notes</b>
+        <button type="button" className="add" onClick={onClose} aria-label="Close">close</button>
+      </div>
+      {flags.length === 0 ? (
+        <p className="small muted">Nothing open. Run the Humanizer again when you&apos;re happy.</p>
+      ) : (
+        <>
+          <p className="small muted">Underlined in the text. Click a note to jump to it. Fix it yourself, or let the AI.</p>
+          <button type="button" className="btn small-btn" disabled={pending} onClick={() => onFix(flags, 'all')}>
+            {busy === 'all' ? 'Fixing…' : `AI fix everything (${flags.length})`}
+          </button>
+          <ul>
+            {flags.map((f) => (
+              <li key={f.key}>
+                <span className="note-check">{f.check}</span>
+                <button type="button" className="note-quote" onClick={() => show(f)}>“{quoteText(f.quote)}”</button>
+                <span className="small">{f.issue}</span>
+                {f.fix && <span className="small muted"><em>Suggestion:</em> {f.fix}</span>}
+                <span className="flag-actions">
+                  <button type="button" className="add strong" disabled={pending} onClick={() => onFix([f], f.key)}>
+                    {busy === f.key ? 'fixing…' : 'let AI fix this'}
+                  </button>
+                  <button type="button" className="add" disabled={pending} onClick={() => onLeave(f)}>leave it</button>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </aside>
+  );
+}
+
+export default function WritingEditor({
+  id,
+  initial,
+  written,
+  qc,
+  dismissed: initialDismissed,
+}: {
+  id: string;
+  initial: Doc;
+  written: boolean;
+  qc: HumanizerResult | null;
+  dismissed: string[];
+}) {
   const router = useRouter();
   const { doc, update, status, flush } = useAutosave(id, initial);
   const [active, setActive] = useState<Editor | null>(null);
   const [pending, start] = useTransition();
   const [error, setError] = useState('');
   const [imgBusy, setImgBusy] = useState(false);
+  const [dismissed, setDismissed] = useState(initialDismissed);
+  const [busy, setBusy] = useState('');
+  const [note, setNote] = useState('');
+
+  // The Humanizer's flags that still apply, recomputed as you type: fix a passage and its note goes.
+  const html = useMemo(() => compileHtml(doc), [doc]);
+  const flags = useMemo(() => openFlags(qc, doc.title.text, html, dismissed), [qc, doc.title.text, html, dismissed]);
+  const [showNotes, setShowNotes] = useState(flags.length > 0);
+  const marks = useMemo(() => flags.map((f) => ({ key: f.key, quote: f.quote, label: `${f.check}: ${f.issue}` })), [flags]);
+  const flaggedField = (t: string) => flags.some((f) => norm(t).includes(norm(quoteText(f.quote))));
+  const fieldClass = (base: string, t: string) => (flaggedField(t) ? `${base} flag-field flagged-field` : `${base} flag-field`);
+
+  const fixWithAi = (list: OpenFlag[], tag: string) =>
+    start(async () => {
+      setBusy(tag);
+      setError('');
+      setNote('');
+      await flush();
+      const r = await aiFix(id, list.map(({ check, quote, issue, fix }) => ({ check, quote, issue, fix })));
+      setBusy('');
+      if ('error' in r && r.error) return setError(r.error);
+      setNote(r.note || 'Fixed.');
+      router.refresh();
+    });
+
+  const leave = (f: OpenFlag) => {
+    setDismissed((d) => [...d, f.quote]);
+    dismissFlag(id, { check: f.check, quote: f.quote, issue: f.issue });
+  };
+
+  const rewrite = () => {
+    if (!window.confirm('Let the AI write the whole piece again from your outline and source? This replaces the current text (your version is kept for the AI to learn from).')) return;
+    write();
+  };
 
   const addImage = async () => {
     if (!active) return setError('Click into the text where the image should go first.');
@@ -88,19 +197,33 @@ export default function WritingEditor({ id, initial, written }: { id: string; in
     });
 
   const body = (b: Block, set: (d: Doc) => Block, placeholder: string) => (
-    <BodyEditor key={b.id} value={b.body} placeholder={placeholder} onFocus={setActive} onChange={(html) => update((d) => { set(d).body = html; })} />
+    <BodyEditor key={b.id} value={b.body} flags={marks} placeholder={placeholder} onFocus={setActive} onChange={(html) => update((d) => { set(d).body = html; })} />
   );
 
   return (
-    <div className="sheet writing">
+    <div className={`sheet writing${showNotes && qc ? ' with-notes' : ''}`}>
       <div className="sheet-bar sticky no-print">
         <Toolbar editor={active} onImage={addImage} busy={imgBusy} />
         <span className="grow" />
         <SaveStatus status={status} />
+        {qc && (
+          <button type="button" className={`quiet-btn${flags.length ? ' has-notes' : ''}`} onClick={() => setShowNotes((v) => !v)}>
+            Humanizer notes{flags.length ? ` (${flags.length})` : ''}
+          </button>
+        )}
+        {written && (
+          <button type="button" className="quiet-btn" disabled={pending} onClick={rewrite}>
+            {pending && busy === '' ? 'Writing…' : 'AI rewrite'}
+          </button>
+        )}
         <PrintButton label="Print article" />
         <Link className="quiet-btn" href={`/studio/humanizer/${id}`} onClick={() => flush()}>Humanizer →</Link>
       </div>
       {error && <p className="notice error no-print">{error}</p>}
+      {note && <p className="notice no-print">{note}</p>}
+      {showNotes && qc && (
+        <Notes flags={flags} busy={busy} pending={pending} onFix={fixWithAi} onLeave={leave} onClose={() => setShowNotes(false)} />
+      )}
       {!written && (
         <div className="notice no-print">
           Nothing written yet. Write straight into the page, or
@@ -110,7 +233,7 @@ export default function WritingEditor({ id, initial, written }: { id: string; in
         </div>
       )}
 
-      <AutoText className="w-title" value={doc.title.text} placeholder="Title" onChange={(v) => update((d) => { d.title.text = v; })} />
+      <AutoText className={fieldClass('w-title', doc.title.text)} value={doc.title.text} placeholder="Title" onChange={(v) => update((d) => { d.title.text = v; })} />
       <Hints b={{ ...doc.title, text: '' }} />
 
       <section className="w-section">
@@ -121,12 +244,12 @@ export default function WritingEditor({ id, initial, written }: { id: string; in
 
       {doc.points.map((p, i) => (
         <section key={p.id} className="w-section">
-          <AutoText className="w-h2" value={p.text} placeholder={`Point ${i + 1}`} onChange={(v) => update((d) => { d.points[i].text = v; })} />
+          <AutoText className={fieldClass('w-h2', p.text)} value={p.text} placeholder={`Point ${i + 1}`} onChange={(v) => update((d) => { d.points[i].text = v; })} />
           <Hints b={p} />
           {body(p, (d) => d.points[i], 'Write this point…')}
           {p.forks.map((f, j) => (
             <div key={f.id} className="w-fork">
-              <AutoText className="w-h3" value={f.text} placeholder="Fork (leave empty for no subheading)" onChange={(v) => update((d) => { d.points[i].forks[j].text = v; })} />
+              <AutoText className={fieldClass('w-h3', f.text)} value={f.text} placeholder="Fork (leave empty for no subheading)" onChange={(v) => update((d) => { d.points[i].forks[j].text = v; })} />
               <Hints b={f} />
               {body(f, (d) => d.points[i].forks[j], 'Write this fork…')}
             </div>

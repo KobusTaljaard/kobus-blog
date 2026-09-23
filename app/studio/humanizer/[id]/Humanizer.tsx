@@ -3,8 +3,8 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState, useTransition } from 'react';
-import { CHECK_MIN, OVERALL_MIN, type HumanizerResult } from '@/lib/rules';
-import { runHumanizer, applyFix, publish, unpublish, savePublishDetails } from '../../actions';
+import { CHECK_MIN, OVERALL_MIN, norm, plainText, quoteText, type HumanizerResult } from '@/lib/rules';
+import { runHumanizer, applyFix, aiFix, dismissFlag, publish, unpublish, savePublishDetails } from '../../actions';
 import { pickAndUploadImage } from '../../_ui/images';
 
 type P = {
@@ -20,6 +20,7 @@ type P = {
   featured: string | null;
   qc: HumanizerResult | null;
   qcHash: string | null;
+  dismissed: string[];
 };
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -30,7 +31,8 @@ export default function Humanizer({ p }: { p: P }) {
   const [qcHash, setQcHash] = useState(p.qcHash);
   const hash = p.hash;
   const [open, setOpen] = useState<string | null>(null);
-  const [fixed, setFixed] = useState<Set<string>>(new Set());
+  const [dismissed, setDismissed] = useState<string[]>(p.dismissed);
+  const [note, setNote] = useState('');
   const [pending, start] = useTransition();
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
@@ -42,17 +44,29 @@ export default function Humanizer({ p }: { p: P }) {
   const canPublish = current && !!qc?.passed && !!featured;
   const live = p.status === 'published';
 
-  // Mark every flagged passage in the article so you can see where it sits.
+  // A flag is open while its passage is still in the text and you haven't set it aside.
+  const text = useMemo(() => norm(p.title + '\n' + plainText(p.html)), [p.title, p.html]);
+  const state = (quote: string) =>
+    dismissed.includes(quote) ? 'left' : text.includes(norm(quoteText(quote))) ? 'open' : 'done';
+  const allOpen = useMemo(
+    () => (qc ? qc.checks.flatMap((c) => c.flags.filter((f) => state(f.quote) === 'open').map((f) => ({ check: c.name, ...f }))) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [qc, text, dismissed],
+  );
+
+  // Mark every open flagged passage in the article so you can see where it sits.
   const marked = useMemo(() => {
     let html = p.html;
-    if (!qc || !current) return html;
-    for (const c of qc.checks)
-      for (const f of c.flags) {
-        const needle = esc(f.quote);
-        if (!fixed.has(f.quote) && html.includes(needle)) html = html.replace(needle, `<mark title="${esc(c.name)}">${needle}</mark>`);
-      }
+    if (!qc) return html;
+    for (const f of allOpen) {
+      const needle = esc(quoteText(f.quote));
+      let at = html.indexOf(needle);
+      if (at < 0) at = norm(html).indexOf(norm(needle));
+      if (at < 0) continue;
+      html = html.slice(0, at) + `<mark title="${esc(f.check + ': ' + f.issue)}">` + html.slice(at, at + needle.length) + '</mark>' + html.slice(at + needle.length);
+    }
     return html;
-  }, [p.html, qc, current, fixed]);
+  }, [p.html, qc, allOpen]);
 
   const run = () =>
     start(async () => {
@@ -64,19 +78,37 @@ export default function Humanizer({ p }: { p: P }) {
       if (r.result) {
         setQc(r.result);
         setQcHash(r.hash!);
-        setFixed(new Set());
+        setDismissed([]);
+        setNote('');
         const firstWeak = r.result.checks.find((c) => c.gate && c.score < CHECK_MIN) || r.result.checks[0];
         setOpen(firstWeak?.key || null);
       }
     });
 
-  const fix = (quote: string, text: string) =>
+  const fix = (quote: string, replacement: string) =>
     start(async () => {
       setError('');
-      const r = await applyFix(p.id, quote, text);
+      const r = await applyFix(p.id, quote, replacement);
       if ('error' in r && r.error) return setError(r.error);
-      setFixed((s) => new Set(s).add(quote));
       router.refresh();
+    });
+
+  const letAiFix = (flags: { check: string; quote: string; issue: string; fix?: string }[], tag: string) =>
+    start(async () => {
+      setBusy(tag);
+      setError('');
+      setNote('');
+      const r = await aiFix(p.id, flags);
+      setBusy('');
+      if ('error' in r && r.error) return setError(r.error);
+      setNote(`${r.note || 'Fixed.'}${r.missed ? ` (${r.missed} edit${r.missed === 1 ? '' : 's'} could not be placed.)` : ''} Run the Humanizer again when you're done.`);
+      router.refresh();
+    });
+
+  const leave = (f: { check: string; quote: string; issue: string }) =>
+    start(async () => {
+      setDismissed((d) => [...d, f.quote]);
+      await dismissFlag(p.id, f);
     });
 
   const saveDetails = async (next?: { featured?: string | null }) => {
@@ -121,6 +153,15 @@ export default function Humanizer({ p }: { p: P }) {
         </div>
         {qc && !current && <p className="notice">The text changed since this run. Run it again to publish.</p>}
         {qc?.summary && <p className="hum-summary">{qc.summary}</p>}
+        {allOpen.length > 0 && (
+          <div className="fix-all">
+            <button type="button" className="btn" disabled={pending} onClick={() => letAiFix(allOpen, 'all')}>
+              {busy === 'all' ? 'Fixing… (a minute or two)' : `AI fix everything (${allOpen.length})`}
+            </button>
+            <Link className="quiet-btn" href={`/studio/writing/${p.id}`}>Fix them myself in Writing →</Link>
+          </div>
+        )}
+        {note && <p className="notice">{note}</p>}
 
         {qc?.checks.map((c) => (
           <div key={c.key} className={`check ${open === c.key ? 'open' : ''}`}>
@@ -133,23 +174,45 @@ export default function Humanizer({ p }: { p: P }) {
               <div className="check-body">
                 <p>{c.summary}</p>
                 {c.flags.length === 0 && <p className="muted">Nothing to fix here.</p>}
+                {c.flags.some((f) => state(f.quote) === 'open') && c.flags.filter((f) => state(f.quote) === 'open').length > 1 && (
+                  <button
+                    type="button"
+                    className="add"
+                    disabled={pending}
+                    onClick={() => letAiFix(c.flags.filter((f) => state(f.quote) === 'open').map((f) => ({ check: c.name, ...f })), c.key)}
+                  >
+                    {busy === c.key ? 'fixing…' : `let AI fix all ${c.flags.filter((f) => state(f.quote) === 'open').length} here`}
+                  </button>
+                )}
                 <ul>
-                  {c.flags.map((f, i) => (
-                    <li key={i} className={fixed.has(f.quote) ? 'done' : ''}>
-                      <q>{f.quote}</q>
-                      <span>{f.issue}</span>
-                      {f.fix && (
-                        <span className="fix">
-                          <em>{f.fix}</em>
-                          {fixed.has(f.quote) ? (
-                            <span className="muted"> ✓ applied</span>
-                          ) : (
-                            <button type="button" className="add" disabled={pending} onClick={() => fix(f.quote, f.fix!)}>apply fix</button>
-                          )}
-                        </span>
-                      )}
-                    </li>
-                  ))}
+                  {c.flags.map((f, i) => {
+                    const st = state(f.quote);
+                    const tag = `${c.key}-${i}`;
+                    return (
+                      <li key={i} className={st !== 'open' ? 'done' : ''}>
+                        <q>{f.quote}</q>
+                        <span>{f.issue}</span>
+                        {f.fix && st === 'open' && (
+                          <span className="fix">
+                            <em>{f.fix}</em>
+                          </span>
+                        )}
+                        {st === 'open' ? (
+                          <span className="flag-actions">
+                            <button type="button" className="add strong" disabled={pending} onClick={() => letAiFix([{ check: c.name, ...f }], tag)}>
+                              {busy === tag ? 'fixing…' : 'let AI fix this'}
+                            </button>
+                            {f.fix && (
+                              <button type="button" className="add" disabled={pending} onClick={() => fix(f.quote, f.fix!)}>use the suggestion</button>
+                            )}
+                            <button type="button" className="add" disabled={pending} onClick={() => leave({ check: c.name, ...f })}>leave it</button>
+                          </span>
+                        ) : (
+                          <span className="muted small">{st === 'left' ? 'left as it is' : '✓ changed'}</span>
+                        )}
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             )}

@@ -1,7 +1,8 @@
 // One skeleton shared by the Outline and Writing tabs, so a change in one shows in the other.
 // Outline edits `text` (the idea); Writing edits `body` (the prose). Titles and headings are the same field.
 
-export type Block = { id: string; text: string; body: string; apps: string[] };
+// `cue` keeps the original outline line once the writer has given the block a printed heading.
+export type Block = { id: string; text: string; body: string; apps: string[]; cue?: string };
 export type Point = Block & { forks: Block[] };
 export type Doc = {
   v: 1;
@@ -60,6 +61,7 @@ export function normaliseDoc(input: any, fallbackTitle = ''): Doc {
     text: typeof x === 'string' ? x : String(x?.text ?? ''),
     body: String(x?.body ?? ''),
     apps: Array.isArray(x?.apps) ? x.apps.map(String).filter((s: string) => s.trim()) : [],
+    ...(typeof x?.cue === 'string' && x.cue.trim() ? { cue: x.cue } : {}),
   });
   const d = input || {};
   return {
@@ -114,4 +116,36 @@ export function isWritten(doc: Doc | null): boolean {
 export function docOf(post: { doc?: any; outline?: string | null; title?: string | null; theme?: string | null }): Doc {
   if (post.doc) return normaliseDoc(post.doc, post.title || '');
   return docFromMarkdown(post.outline || '', post.title || post.theme || '');
+}
+
+const strip = (html: string) => html.replace(/<\/(p|h[1-6]|blockquote)>/g, '\n').replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
+
+/** The outline as plain lines (for the learning log). */
+export function outlineText(doc: Doc): string {
+  const a = (b: Block) => (b.apps.length ? `\n    apply: ${b.apps.join(' | ')}` : '');
+  const lines = [`TITLE: ${doc.title.text}${a(doc.title)}`, `INTRO: ${doc.intro.text}${a(doc.intro)}`];
+  doc.points.forEach((p, i) => {
+    lines.push(`POINT ${i + 1}: ${p.cue || p.text}${a(p)}`);
+    p.forks.forEach((f) => lines.push(`  - ${f.cue || f.text}${a(f)}`));
+  });
+  lines.push(`OUTRO: ${doc.outro.text}${a(doc.outro)}`, `CONCLUSION: ${doc.conclusion.text}${a(doc.conclusion)}`);
+  return lines.join('\n');
+}
+
+/** The written piece as plain text with headings (for the learning log). */
+export function draftText(doc: Doc): string {
+  const out: string[] = [];
+  const add = (h: string, body: string, mark = '') => {
+    if (mark && h.trim()) out.push(`${mark} ${h.trim()}`);
+    if (body.trim()) out.push(strip(body));
+  };
+  add('', doc.intro.body);
+  doc.points.forEach((p) => {
+    add(p.text, p.body, '##');
+    p.forks.forEach((f) => add(f.text, f.body, '###'));
+  });
+  add('', doc.outro.body);
+  add('', doc.conclusion.body);
+  const body = out.join('\n\n');
+  return body.trim() ? `# ${doc.title.text}\n\n${body}` : '';
 }

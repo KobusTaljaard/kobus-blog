@@ -13,6 +13,7 @@ const TABS = [
   { key: 'humanizer', label: ['Humanizer'] },
   { key: 'blog', label: ['Blog'] },
   { key: 'comments', label: ['Comments'] },
+  { key: 'voice', label: ['Voice'] },
 ] as const;
 
 const PIECE_TABS = new Set(['outlines', 'writing', 'humanizer']);
