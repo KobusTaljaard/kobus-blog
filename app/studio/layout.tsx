@@ -17,7 +17,6 @@ export default async function StudioLayout({ children }: { children: React.React
           <Link href="/studio">Posts</Link>
           <Link href="/studio/sources">Sources</Link>
           <Link href="/studio/comments">{n ? `Comments (${n})` : 'Comments'}</Link>
-          <Link href="/studio/messages">Messages</Link>
           <Link href="/">Blog</Link>
           <form action={signOut}><button className="link-btn">Sign out</button></form>
         </nav>

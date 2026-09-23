@@ -2,7 +2,6 @@ import Link from 'next/link';
 import { sql } from '@/lib/db';
 import { formatDate } from '@/lib/html';
 import Strip from '@/components/Strip';
-import Foot from '@/components/Foot';
 
 export const dynamic = 'force-dynamic';
 
@@ -54,7 +53,6 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ t
           </ul>
         )}
       </main>
-      <Foot />
     </>
   );
 }

@@ -49,7 +49,7 @@ export default async function PostPage({ params }: { params: Promise<{ slug: str
         )}
       </main>
       <Comments postId={p.id} />
-      <Foot note={false} />
+      <Foot />
     </>
   );
 }
