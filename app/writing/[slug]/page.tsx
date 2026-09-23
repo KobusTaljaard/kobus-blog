@@ -5,6 +5,7 @@ import { sql } from '@/lib/db';
 import { formatDate } from '@/lib/html';
 import Strip from '@/components/Strip';
 import Foot from '@/components/Foot';
+import Comments from '@/components/Comments';
 
 export const dynamic = 'force-dynamic';
 
@@ -47,7 +48,8 @@ export default async function PostPage({ params }: { params: Promise<{ slug: str
           </div>
         )}
       </main>
-      <Foot postId={p.id} />
+      <Comments postId={p.id} />
+      <Foot note={false} />
     </>
   );
 }

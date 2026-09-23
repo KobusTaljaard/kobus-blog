@@ -3,7 +3,7 @@
 import { useActionState } from 'react';
 import { sendMessage } from './message-action';
 
-export default function MessageBox({ postId }: { postId?: string }) {
+export default function MessageBox() {
   const [state, action, pending] = useActionState(sendMessage, null as null | { done?: boolean; error?: string });
   if (state?.done) return <p className="muted" style={{ margin: 0 }}>Thank you. Your note reached me.</p>;
   return (
@@ -15,7 +15,6 @@ export default function MessageBox({ postId }: { postId?: string }) {
         <input className="field" name="email" type="email" placeholder="Email, if you'd like a reply" autoComplete="email" />
       </div>
       <input className="visually-hidden" tabIndex={-1} autoComplete="off" name="website" aria-hidden="true" />
-      {postId && <input type="hidden" name="post" value={postId} />}
       <div><button className="btn ghost" disabled={pending}>{pending ? 'Sending…' : 'Send'}</button></div>
       {state?.error && <p className="small" style={{ margin: 0, color: 'var(--fail)' }}>{state.error}</p>}
     </form>

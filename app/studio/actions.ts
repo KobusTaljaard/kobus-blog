@@ -215,3 +215,30 @@ export async function deleteMessage(id: string) {
   await sql`delete from app.messages where id = ${id}`;
   revalidatePath('/studio/messages');
 }
+
+// ---------- Comments ----------
+
+export async function moderateComment(id: string, action: 'approve' | 'reject' | 'block' | 'delete') {
+  await requireOwner();
+  const [c] = await sql`select c.id, c.email, c.sender, p.slug from app.comments c
+                        join app.posts p on p.id = c.post_id where c.id = ${id}`;
+  if (!c) return;
+  if (action === 'approve') await sql`update app.comments set status = 'approved' where id = ${id}`;
+  if (action === 'reject') await sql`update app.comments set status = 'rejected' where id = ${id}`;
+  if (action === 'delete') await sql`delete from app.comments where id = ${id}`;
+  if (action === 'block') {
+    if (c.sender) await sql`insert into app.blocked (kind, value) values ('sender', ${c.sender}) on conflict do nothing`;
+    if (c.email) await sql`insert into app.blocked (kind, value) values ('email', ${c.email}) on conflict do nothing`;
+    // Hide everything this person has sent, published or not.
+    await sql`update app.comments set status = 'rejected'
+              where sender = ${c.sender} or (email is not null and email = ${c.email})`;
+  }
+  revalidatePath('/studio/comments');
+  refreshPublic(c.slug);
+}
+
+export async function unblock(id: string) {
+  await requireOwner();
+  await sql`delete from app.blocked where id = ${id}`;
+  revalidatePath('/studio/comments');
+}
