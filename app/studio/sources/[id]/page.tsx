@@ -19,9 +19,7 @@ export default async function SourceView({ params }: { params: Promise<{ id: str
         <Link href="/studio/sources" className="muted">← All sources</Link>
         <span className="muted">{src.filename} · {formatDate(src.created_at)}</span>
         <span className="grow" />
-        {pieces.map((p) => (
-          <Link key={p.id} className="quiet-btn" href={`/studio/outlines/${p.id}`}>{p.title || p.theme} →</Link>
-        ))}
+        <Link className="quiet-btn" href={`/studio/themes/${src.id}`}>Themes →</Link>
         <SourceRowActions id={src.id} failed={!!src.failed} canDelete={pieces.length === 0} />
         <PrintButton />
       </div>

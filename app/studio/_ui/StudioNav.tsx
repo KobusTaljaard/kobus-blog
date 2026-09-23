@@ -7,6 +7,7 @@ import { usePathname } from 'next/navigation';
 // the steps still ahead wait on the right.
 const TABS = [
   { key: 'sources', label: ['Original', 'Sources'] },
+  { key: 'themes', label: ['Themes'] },
   { key: 'outlines', label: ['Outlines'] },
   { key: 'writing', label: ['Writing'] },
   { key: 'humanizer', label: ['Humanizer'] },

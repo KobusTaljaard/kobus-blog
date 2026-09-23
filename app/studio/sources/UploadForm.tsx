@@ -21,7 +21,7 @@ export default function UploadForm() {
       </label>
       <div className="actions" style={{ margin: 0 }}>
         <button className="btn" disabled={pending || !name}>{pending ? 'Reading your entry…' : 'Upload'}</button>
-        {pending && <span className="muted small">Finding the themes and outlining them. This takes a minute or two.</span>}
+        {pending && <span className="muted small">Finding the themes. This takes about a minute.</span>}
       </div>
       {state?.error && <p className="notice error">{state.error}</p>}
     </form>

@@ -4,7 +4,7 @@ import { useTransition, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { reanalyseSource, deleteSource } from '../actions';
 
-export default function SourceRowActions({ id, failed, canDelete }: { id: string; failed: boolean; canDelete: boolean }) {
+export default function SourceRowActions({ id, failed, canDelete, label = 'Find the themes again' }: { id: string; failed: boolean; canDelete: boolean; label?: string }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [err, setErr] = useState('');
@@ -15,7 +15,7 @@ export default function SourceRowActions({ id, failed, canDelete }: { id: string
           const r = await reanalyseSource(id);
           if (r?.error) setErr(r.error);
         })}>
-          {pending ? 'Analysing… (about a minute)' : 'Analyse again'}
+          {pending ? 'Finding themes… (about a minute)' : label}
         </button>
       )}
       {canDelete && (

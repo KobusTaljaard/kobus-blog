@@ -4,7 +4,7 @@ import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/lib/auth/server';
 import { sql, CHECK_MIN, OVERALL_MIN, type Post, type HumanizerResult } from '@/lib/db';
-import { analyseTranscript, writeFromOutline, humanize, CHECKS, MODEL } from '@/lib/ai';
+import { findThemes, outlineTheme, writeFromOutline, humanize, CHECKS, MODEL } from '@/lib/ai';
 import { cleanHtml, contentHash, htmlToMarkdown, markdownToHtml, slugify } from '@/lib/html';
 import { compileHtml, docOf, normaliseDoc, type Doc } from '@/lib/doc';
 
@@ -20,19 +20,20 @@ async function getPost(id: string): Promise<Post> {
 }
 
 
-// ---------- Original sources ----------
+// ---------- Original sources → themes ----------
 
-async function analyseAndSplit(sourceId: string, content: string) {
+async function discoverThemes(sourceId: string, content: string) {
   try {
-    const analysis = await analyseTranscript(content);
-    await sql`update app.sources set analysis = ${JSON.stringify(analysis)}::jsonb where id = ${sourceId}`;
-    for (const t of analysis.themes) {
-      const doc = normaliseDoc(t.outline, t.theme);
-      const notes = [t.notes, analysis.general_notes].filter(Boolean).join('\n\n');
-      await sql`insert into app.posts (source_id, theme, title, doc, notes, status)
-                values (${sourceId}, ${t.theme}, ${doc.title.text}, ${JSON.stringify(doc)}::jsonb, ${notes}, 'outline')`;
+    const found = await findThemes(content);
+    await sql`update app.sources set analysis = ${JSON.stringify({ notes: found.notes })}::jsonb where id = ${sourceId}`;
+    await sql`delete from app.themes where source_id = ${sourceId} and status in ('proposed', 'removed', 'merged')
+              and post_id is null`;
+    let i = 0;
+    for (const t of found.themes) {
+      await sql`insert into app.themes (source_id, name, summary, quotes, main, sort)
+                values (${sourceId}, ${t.name.trim()}, ${t.summary.trim()}, ${(t.quotes || []).slice(0, 3)}, ${!!t.main}, ${i++})`;
     }
-    return { ok: true as const, count: analysis.themes.length };
+    return { ok: true as const };
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     await sql`update app.sources set analysis = ${JSON.stringify({ error: message })}::jsonb where id = ${sourceId}`;
@@ -48,24 +49,106 @@ export async function uploadSource(_prev: unknown, formData: FormData) {
   const content = (await file.text()).trim();
   if (!content) return { error: 'That file is empty.' };
   const [src] = await sql`insert into app.sources (filename, content) values (${file.name}, ${content}) returning id`;
-  const result = await analyseAndSplit(src.id, content);
-  if (!result.ok) return { error: `Saved, but the analysis failed: ${result.error}. Try “analyse again”.` };
-  redirect('/studio/outlines');
+  const result = await discoverThemes(src.id, content);
+  if (!result.ok) return { error: `Saved, but finding the themes failed: ${result.error}. Open the source and try again.` };
+  redirect(`/studio/themes/${src.id}`);
 }
 
+/** Finds the themes again (replaces any you haven't outlined yet). */
 export async function reanalyseSource(id: string) {
   await requireOwner();
   const [src] = await sql`select content from app.sources where id = ${id}`;
   if (!src) return { error: 'Source not found.' };
-  const result = await analyseAndSplit(id, src.content);
+  const result = await discoverThemes(id, src.content);
   if (!result.ok) return { error: result.error };
-  redirect('/studio/outlines');
+  redirect(`/studio/themes/${id}`);
+}
+
+// ---------- Themes: keep, remove, merge, outline ----------
+
+export async function setThemeRemoved(id: string, removed: boolean) {
+  await requireOwner();
+  await sql`update app.themes set status = ${removed ? 'removed' : 'proposed'} where id = ${id} and status in ('proposed','removed')`;
+  const [t] = await sql`select source_id from app.themes where id = ${id}`;
+  if (t) revalidatePath(`/studio/themes/${t.source_id}`);
+}
+
+/** The first id leads: the merged theme takes its name; the rest fold into it. */
+export async function mergeThemes(ids: string[]) {
+  await requireOwner();
+  if (ids.length < 2) return { error: 'Tick at least two themes to merge.' };
+  const rows = await sql`select * from app.themes where id = any(${ids}::uuid[]) and status = 'proposed'`;
+  if (rows.length !== ids.length) return { error: 'One of those themes is no longer available.' };
+  const lead = rows.find((r) => r.id === ids[0])!;
+  const rest = ids.slice(1).map((id) => rows.find((r) => r.id === id)!);
+  // A merged theme can itself be merged again: flatten its members.
+  const members = [lead, ...rest].flatMap((r) => (r.members?.length ? r.members : [r.id]));
+  const [m] = await sql`insert into app.themes (source_id, name, summary, quotes, main, members, sort)
+    values (${lead.source_id}, ${lead.name}, ${lead.summary}, ${[...lead.quotes, ...rest.flatMap((r) => r.quotes)].slice(0, 4)},
+            ${rows.some((r) => r.main)}, ${members}::uuid[], ${lead.sort}) returning id`;
+  await sql`update app.themes set status = 'merged' where id = any(${ids}::uuid[])`;
+  // Merged-away merges are no longer needed once their members move to the new one.
+  await sql`delete from app.themes where id = any(${ids}::uuid[]) and cardinality(members) > 0`;
+  revalidatePath(`/studio/themes/${lead.source_id}`);
+  return { ok: true, id: m.id };
+}
+
+export async function unmergeTheme(id: string) {
+  await requireOwner();
+  const [t] = await sql`select * from app.themes where id = ${id} and cardinality(members) > 0 and status = 'proposed'`;
+  if (!t) return { error: 'That theme cannot be split.' };
+  await sql`update app.themes set status = 'proposed' where id = any(${t.members}::uuid[])`;
+  await sql`delete from app.themes where id = ${id}`;
+  revalidatePath(`/studio/themes/${t.source_id}`);
+  return { ok: true };
+}
+
+/** One outline per chosen theme, made side by side. */
+export async function makeOutlines(ids: string[]) {
+  await requireOwner();
+  if (!ids.length) return { error: 'Tick at least one theme.' };
+  const chosen = await sql`select * from app.themes where id = any(${ids}::uuid[])
+    and (status = 'proposed' or (status = 'outlined' and post_id is null))`;
+  if (!chosen.length) return { error: 'Those themes are no longer available.' };
+  const sourceId = chosen[0].source_id;
+  const [src] = await sql`select content, analysis from app.sources where id = ${sourceId}`;
+  const all = await sql`select id, name, summary, status, members from app.themes where source_id = ${sourceId}`;
+  const byId = new Map(all.map((t) => [t.id, t]));
+
+  const results = await Promise.allSettled(
+    chosen.map(async (t) => {
+      const absorbedIds: string[] = (t.members || []).slice(1);
+      const lead = t.members?.length ? byId.get(t.members[0]) || t : t;
+      const mine = new Set([t.id, ...(t.members || [])]);
+      const others = all.filter((o) => !mine.has(o.id) && !(o.members?.length));
+      const outline = await outlineTheme({
+        transcript: src.content,
+        theme: { name: lead.name, summary: lead.summary },
+        absorbed: absorbedIds.map((i) => byId.get(i)).filter(Boolean).map((a: any) => ({ name: a.name, summary: a.summary })),
+        others: others.map((o) => ({ name: o.name, summary: o.summary })),
+        notes: src.analysis?.notes || '',
+      });
+      const doc = normaliseDoc(outline, t.name);
+      const [post] = await sql`insert into app.posts (source_id, theme, title, doc, notes, status)
+        values (${sourceId}, ${t.name}, ${doc.title.text}, ${JSON.stringify(doc)}::jsonb, ${src.analysis?.notes || ''}, 'outline')
+        returning id`;
+      await sql`update app.themes set status = 'outlined', post_id = ${post.id} where id = ${t.id}`;
+      return post.id as string;
+    }),
+  );
+  revalidatePath(`/studio/themes/${sourceId}`);
+  const failed = results.filter((r) => r.status === 'rejected') as PromiseRejectedResult[];
+  const made = results.filter((r) => r.status === 'fulfilled') as PromiseFulfilledResult<string>[];
+  if (failed.length && !made.length) return { error: `The outlines could not be made: ${failed[0].reason?.message || failed[0].reason}` };
+  if (made.length === 1 && !failed.length) redirect(`/studio/outlines/${made[0].value}`);
+  if (!failed.length) redirect('/studio/outlines');
+  return { error: `${made.length} outline(s) made; ${failed.length} failed. Try those again.` };
 }
 
 export async function deleteSource(id: string) {
   await requireOwner();
   const [{ n }] = await sql`select count(*)::int as n from app.posts where source_id = ${id}`;
-  if (n > 0) return { error: 'Pieces still come from this source. Delete them first.' };
+  if (n > 0) return { error: 'Outlines still come from this source. Delete them first.' };
   await sql`delete from app.sources where id = ${id}`;
   revalidatePath('/studio/sources');
   return { ok: true };

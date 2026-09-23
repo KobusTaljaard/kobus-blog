@@ -67,39 +67,31 @@ How he structures a piece: a title; an intro; usually two to five points; under 
 const APPS = { type: 'array', items: { type: 'string' }, description: 'Applications he makes at this spot, one short line each. Empty if none.' };
 const LINE = (d: string) => ({ type: 'object', properties: { text: { type: 'string', description: d }, apps: APPS }, required: ['text', 'apps'] });
 
-// ---------- Background analysis: themes, each as an outline in his structure ----------
+// ---------- Step 1: themes in an original source ----------
 
-export type OutlineOut = {
-  title: { text: string; apps: string[] };
-  intro: { text: string; apps: string[] };
-  points: { text: string; apps: string[]; forks: { text: string; apps: string[] }[] }[];
-  outro: { text: string; apps: string[] };
-  conclusion: { text: string; apps: string[] };
-};
-export type Theme = { theme: string; outline: OutlineOut; notes: string };
-export type Analysis = { themes: Theme[]; general_notes: string };
+export type FoundTheme = { name: string; summary: string; quotes: string[]; main: boolean };
+export type ThemeFind = { themes: FoundTheme[]; notes: string };
 
-export async function analyseTranscript(transcript: string): Promise<Analysis> {
-  return callTool<Analysis>({
+export async function findThemes(transcript: string): Promise<ThemeFind> {
+  return callTool<ThemeFind>({
     system: `${WRITER_CONTEXT}
 
-You are his editor. You read the transcript of one notebook entry and prepare outlines for the blog. You never add ideas of your own.`,
+You are his editor. You read one notebook entry and name the themes in it, so he can choose which become blog posts. You never add ideas of your own.`,
     user: `<transcript>
 ${transcript}
 </transcript>
 
-1. Find how many distinct themes it holds. A theme could stand as its own post. Related thoughts serving one point are one theme; one theme is normal.
-2. For each theme, outline it in his structure. Every entry is an idea, not prose: one line, in his own words where possible.
-   - title: a working title.
-   - intro: the idea he opens with.
-   - points: the main points in a sensible order (as many as the material has, usually 2–5). Give a point forks only where he actually branches it.
-   - outro: the turn toward the landing, if there is one; else empty.
-   - conclusion: the landing, only if he states one; else empty.
-   - apps: record each application he makes, at the spot where he makes it.
-   Do not add points, forks or applications he did not make.
-3. notes: formatting, copywriting and language-consistency issues the writer must fix for this theme (mixed British/American spelling — keep his dominant variant, likely British/South African; transcription errors; repeated words; unclear passages). Brief.`,
-    toolName: 'save_analysis',
-    toolDescription: 'Save the themes and their outlines.',
+List the themes in this entry. A theme is a subject that could carry a post of its own. Name every distinct subject he spends real time on, including side-roads where he wanders off his main subject; he will merge or drop them himself. Do not split one line of thought into several themes, and do not list passing remarks.
+
+For each theme:
+- name: 2–6 words, plain.
+- summary: one sentence saying what he says about it.
+- quotes: 1–3 short lines from the transcript, verbatim, that show it.
+- main: true for the subject the entry is mostly about (exactly one), false for the rest.
+
+notes: formatting, copywriting and language-consistency issues a writer must fix for any post from this entry (mixed British/American spelling — keep his dominant variant, likely British/South African; transcription errors; repeated words; unclear passages). Brief.`,
+    toolName: 'save_themes',
+    toolDescription: 'Save the themes found in the entry.',
     schema: {
       type: 'object',
       properties: {
@@ -109,39 +101,89 @@ ${transcript}
           items: {
             type: 'object',
             properties: {
-              theme: { type: 'string', description: 'Short name of the theme (2–6 words).' },
-              outline: {
-                type: 'object',
-                properties: {
-                  title: LINE('Working title'),
-                  intro: LINE('Intro idea, one line'),
-                  points: {
-                    type: 'array',
-                    items: {
-                      type: 'object',
-                      properties: {
-                        text: { type: 'string' },
-                        apps: APPS,
-                        forks: { type: 'array', items: LINE('Fork idea, one line') },
-                      },
-                      required: ['text', 'apps', 'forks'],
-                    },
-                  },
-                  outro: LINE('Outro idea, one line, or empty'),
-                  conclusion: LINE('Conclusion idea, or empty'),
-                },
-                required: ['title', 'intro', 'points', 'outro', 'conclusion'],
-              },
-              notes: { type: 'string' },
+              name: { type: 'string' },
+              summary: { type: 'string' },
+              quotes: { type: 'array', items: { type: 'string' }, maxItems: 3 },
+              main: { type: 'boolean' },
             },
-            required: ['theme', 'outline', 'notes'],
+            required: ['name', 'summary', 'quotes', 'main'],
           },
         },
-        general_notes: { type: 'string' },
+        notes: { type: 'string' },
       },
-      required: ['themes', 'general_notes'],
+      required: ['themes', 'notes'],
     },
-    maxTokens: 16000,
+    maxTokens: 12000,
+  });
+}
+
+// ---------- Step 2: an outline for one chosen theme ----------
+
+export type OutlineOut = {
+  title: { text: string; apps: string[] };
+  intro: { text: string; apps: string[] };
+  points: { text: string; apps: string[]; forks: { text: string; apps: string[] }[] }[];
+  outro: { text: string; apps: string[] };
+  conclusion: { text: string; apps: string[] };
+};
+
+export async function outlineTheme(input: {
+  transcript: string;
+  theme: { name: string; summary: string };
+  absorbed: { name: string; summary: string }[];
+  others: { name: string; summary: string }[];
+  notes: string;
+}): Promise<OutlineOut> {
+  const absorbed = input.absorbed.length
+    ? `\n\nHe merged these themes into it. Fold them in as points or, more often, as forks under the point they serve:\n${input.absorbed.map((t) => `- ${t.name}: ${t.summary}`).join('\n')}`
+    : '';
+  const others = input.others.length
+    ? `\n\nLeave out material that belongs to these other themes (they are separate pieces or were dropped):\n${input.others.map((t) => `- ${t.name}: ${t.summary}`).join('\n')}`
+    : '';
+  return callTool<OutlineOut>({
+    system: `${WRITER_CONTEXT}
+
+You are his editor. You outline one theme from his notebook entry in his structure. You never add ideas of your own.`,
+    user: `<transcript>
+${input.transcript}
+</transcript>
+
+<theme>
+${input.theme.name}: ${input.theme.summary}${absorbed}${others}
+</theme>
+
+Outline this theme only. Every entry is an idea, not prose: one line, in his own words where possible.
+- title: a working title.
+- intro: the idea he opens with.
+- points: TWO TO FIVE main points (three is typical), never more. A blog post, talk or article cannot carry more. Group related ideas as forks under the point they serve instead of making them points.
+- forks: under any point, 0–6 one-line ideas that open it up. Only where the material branches.
+- outro: the turn toward the landing, if there is one; else empty.
+- conclusion: the landing, only if he states one; else empty.
+- apps: record each application he makes, at the spot where he makes it.
+Do not add points, forks or applications he did not make.`,
+    toolName: 'save_outline',
+    toolDescription: 'Save the outline.',
+    schema: {
+      type: 'object',
+      properties: {
+        title: LINE('Working title'),
+        intro: LINE('Intro idea, one line'),
+        points: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 5,
+          items: {
+            type: 'object',
+            properties: { text: { type: 'string' }, apps: APPS, forks: { type: 'array', maxItems: 6, items: LINE('Fork idea, one line') } },
+            required: ['text', 'apps', 'forks'],
+          },
+        },
+        outro: LINE('Outro idea, one line, or empty'),
+        conclusion: LINE('Conclusion idea, or empty'),
+      },
+      required: ['title', 'intro', 'points', 'outro', 'conclusion'],
+    },
+    maxTokens: 12000,
   });
 }
 

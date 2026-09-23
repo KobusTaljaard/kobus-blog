@@ -285,6 +285,21 @@ form.note { display: grid; gap: 10px; }
 .feature-pick img { width: 180px; aspect-ratio: 21 / 8; object-fit: cover; border-radius: 2px; }
 @media (max-width: 1100px) { .hum { grid-template-columns: 1fr; } .hum-panel { position: static; max-height: none; } }
 
+/* Themes */
+.theme-bar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 20px; }
+.theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 20px; }
+.theme-card { display: flex; flex-direction: column; gap: 8px; padding: 18px 20px; background: #fff; border: 1px solid var(--rule); border-radius: 4px; }
+.theme-card.picked { border-color: var(--navy); box-shadow: 0 0 0 1px var(--navy); }
+.theme-pick { display: flex; align-items: center; gap: 12px; cursor: pointer; }
+.theme-pick input { width: 20px; height: 20px; accent-color: var(--navy); flex: none; }
+.theme-name { font-size: 1.25rem; line-height: 1.3; flex: 1; }
+.pick-no { flex: none; width: 24px; height: 24px; border-radius: 12px; background: var(--navy); color: #fff; font-size: 0.8rem; display: flex; align-items: center; justify-content: center; }
+.theme-tags { display: flex; gap: 8px; }
+.tag { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-soft); border: 1px solid var(--rule); border-radius: 2px; padding: 1px 6px; }
+.theme-summary { margin: 0; font-size: 1rem; line-height: 1.6; }
+.theme-quote { margin: 0; font-size: 0.9rem; font-style: italic; color: var(--ink-soft); line-height: 1.5; }
+.theme-tools { display: flex; gap: 16px; margin-top: auto; padding-top: 6px; }
+
 /* Original sources */
 .source-text { white-space: pre-wrap; column-count: 2; column-gap: 64px; column-rule: 1px solid var(--rule); font-size: 1.08rem; line-height: 1.8; }
 @media (max-width: 1000px) { .source-text { column-count: 1; } .o-point { grid-template-columns: 1fr; gap: 8px; } }
