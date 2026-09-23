@@ -18,23 +18,46 @@ async function callTool<T>(opts: {
   schema: Record<string, unknown>;
   maxTokens: number;
 }): Promise<T> {
-  const res = await client().messages.create({
-    model: MODEL,
-    max_tokens: opts.maxTokens,
-    system: opts.system,
-    messages: [{ role: 'user', content: opts.user }],
-    tools: [
-      {
-        name: opts.toolName,
-        description: opts.toolDescription,
-        input_schema: opts.schema as Anthropic.Tool.InputSchema,
-      },
-    ],
-    tool_choice: { type: 'tool', name: opts.toolName },
-  });
-  const block = res.content.find((b) => b.type === 'tool_use');
-  if (!block || block.type !== 'tool_use') throw new Error('The model returned no result.');
-  return block.input as T;
+  // Newer Opus models reject a forced tool_choice, so the model is asked to use the tool
+  // and the reply is read from the tool call, or from JSON in the text as a fallback.
+  const messages: Anthropic.MessageParam[] = [{ role: 'user', content: opts.user }];
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await client()
+      .messages.stream({
+        model: MODEL,
+        max_tokens: opts.maxTokens,
+        system: `${opts.system}\n\nAlways give your answer by calling the ${opts.toolName} tool exactly once. Do not answer in plain text.`,
+        messages,
+        tools: [
+          {
+            name: opts.toolName,
+            description: opts.toolDescription,
+            input_schema: opts.schema as Anthropic.Tool.InputSchema,
+          },
+        ],
+        tool_choice: { type: 'auto' },
+      })
+      .finalMessage();
+
+    const call = res.content.find((b) => b.type === 'tool_use' && b.name === opts.toolName);
+    if (call && call.type === 'tool_use') return call.input as T;
+
+    const text = res.content
+      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+      .map((b) => b.text)
+      .join('\n');
+    const json = text.match(/\{[\s\S]*\}/);
+    if (json) {
+      try {
+        return JSON.parse(json[0]) as T;
+      } catch {
+        /* fall through to a retry */
+      }
+    }
+    messages.push({ role: 'assistant', content: res.content });
+    messages.push({ role: 'user', content: `Please give the result by calling the ${opts.toolName} tool.` });
+  }
+  throw new Error('The model did not return a usable result. Please try again.');
 }
 
 const WRITER_CONTEXT = `The writer is Kobus Taljaard: a South African real estate investor, businessman and Christian who writes longhand in a notebook, then reads it aloud; the recording is transcribed verbatim (filler words removed). His blog is read only by people — friends, family, curious strangers. It is not written for search engines.`;
@@ -84,7 +107,7 @@ Return the result with the tool.`,
       },
       required: ['themes', 'general_notes'],
     },
-    maxTokens: 8000,
+    maxTokens: 16000,
   });
 }
 
@@ -149,7 +172,7 @@ Write the post and return it with the tool. Also give a one- or two-sentence exc
       },
       required: ['title', 'body_markdown', 'excerpt', 'tags'],
     },
-    maxTokens: 16000,
+    maxTokens: 32000,
   });
 }
 
@@ -212,6 +235,6 @@ Check this post and return the result with the tool. The summary is one or two p
       },
       required: ['ai_score', 'quality_score', 'ai_flags', 'error_flags', 'summary'],
     },
-    maxTokens: 8000,
+    maxTokens: 16000,
   });
 }
